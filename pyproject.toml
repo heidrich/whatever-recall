@@ -1,0 +1,55 @@
+[project]
+name = "whatever-recall"
+version = "0.1.0"
+description = "AI-native project memory. Write-time stamping, token-free recall. The code is the wiki."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "PolyForm-Noncommercial-1.0.0" }
+authors = [{ name = "Kathrin & Christian Mc Cain — McCain Digital", email = "info@mccain-digital.com" }]
+keywords = ["ai", "memory", "code-search", "developer-tools", "rag"]
+
+# The engine core (db, anchors, engine, rules, CLI) is pure stdlib — sqlite3 with
+# FTS5 ships with CPython. No runtime deps required to recall. tree-sitter (code map)
+# and the HTTP bridge are optional extras so the base install stays zero-dependency.
+dependencies = []
+
+[project.optional-dependencies]
+# Code map for bootstrap (S1.3-A). Without it, bootstrap falls back to git-path anchors.
+codemap = ["tree-sitter>=0.21", "tree-sitter-language-pack>=0.1"]
+# HTTP bridge for web-AI (Adapter C). Without it, the CLI + IDE hook still work fully.
+bridge = ["fastapi>=0.110", "uvicorn>=0.29"]
+# Power Mode (ADR-008): the online Anthropic provider for `recall power`. The base
+# install NEVER pulls an LLM SDK — the recall read path stays LLM-free (ADR-012).
+# Ollama (local, free) needs no dependency at all (pure stdlib urllib).
+power = ["anthropic>=0.40"]
+# Everything.
+all = ["tree-sitter>=0.21", "tree-sitter-language-pack>=0.1", "fastapi>=0.110", "uvicorn>=0.29", "anthropic>=0.40"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+recall = "recall.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/heidrich/whatever-recall"
+Repository = "https://github.com/heidrich/whatever-recall"
+
+[tool.pytest.ini_options]
+# Python 3.14 + pytest 9.0.3 (the newest of each as of 2026-06) crash in pytest's
+# OUTPUT-CAPTURE teardown: `tmpfile.seek(0)` / `getvalue()` on an already-closed
+# file → "ValueError: I/O operation on closed file" during _ensure_unconfigure,
+# so `pytest` aborts with "no tests ran" before a single test executes. The tests
+# themselves are green. Disabling capture (-s) sidesteps the broken teardown path.
+# Remove once pytest ships the 3.14 capture fix (this is a workaround, not a pref).
+addopts = "-s"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["recall", "adapters"]
+
+[tool.setuptools.package-data]
+# rules + the dashboard page + its vendored static assets (highlight.js + theme,
+# BSD-3-Clause) so the dashboard renders + highlights code fully offline (no CDN/npm).
+recall = ["rules.md", "getting-started.md", "changelog.md", "dashboard.html", "vendor/*.js", "vendor/*.css", "assets/*.ico", "assets/*.png"]

@@ -1,0 +1,173 @@
+"""LLM edge refinement — turn the deterministic `depends_on` graph into UNDERSTANDING.
+
+The AST graph (recall.graph) states the WHAT: file A imports file B. This layer adds the
+WHY: is B a thing A *implements* (a type/contract), a guard A is *guarded_by* (auth /
+validation), or just a plain dependency? A small LOCAL model does this reliably **when the
+task is decomposed and grounded** — it doesn't invent edges, it only classifies the ones
+the AST already found, picking from a closed label set (proven: even a 3B model nails it;
+free-invention overwhelms it). Write-time only; the recall() read path stays LLM-free.
+
+Reversible + safe by construction:
+  - it ONLY ever changes the `kind` of existing depends_on edges — never creates edges,
+    never deletes, never touches semantic edges a human/commit declared;
+  - every label is re-validated against rules.edge_kinds (a hallucinated label is ignored);
+  - the original kind is recoverable: refined edges are marked so `unrefine` can reset them.
+
+This is the optional intelligence layer. With no provider connected, the graph stays at
+the deterministic depends_on floor — still useful (measured: 68-79% of hits get a chain).
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+# the labels the model may assign to a dependency. Subset of rules.edge_kinds that makes
+# sense for a STATIC import relation (a commit-only kind like 'supersedes' is excluded —
+# the model is classifying "what is this dependency", not editing history).
+_REFINE_LABELS = ("depends_on", "implements", "guarded_by", "relates_to")
+
+_SYSTEM = """\
+You classify ONE source file's dependencies. You are given the file's source and the list \
+of local modules it imports. For EACH import, pick the single best relation label:
+  - guarded_by : the import enforces a rule / auth / validation the file relies on
+  - implements : the file implements a type / interface / contract from the import
+  - depends_on : a plain functional dependency (the safe default)
+  - relates_to : weak or uncertain association
+Output ONE JSON object and NOTHING else:
+{"edges": [{"target": "<import path verbatim>", "kind": "<one label>"}]}
+Use ONLY those four labels. Copy each target VERBATIM from the import list. If unsure, \
+use depends_on. Do not add imports that are not in the list."""
+
+
+@dataclass
+class RefineResult:
+    files_seen: int = 0
+    edges_considered: int = 0
+    edges_refined: int = 0       # depends_on -> a more specific kind
+    edges_unchanged: int = 0     # stayed depends_on (model said so, or low confidence)
+    dropped_labels: int = 0      # model returned a label outside the closed set
+    by_kind: dict[str, int] = field(default_factory=dict)
+
+
+def refine_edges(index, provider, *, file_byte_cap: int = 6000,
+                 progress=None) -> RefineResult:
+    """Classify every depends_on edge's nature with the connected (ideally local) model.
+
+    Groups edges by source file (one model call per file, not per edge), gives the model
+    the file's source + its dependency targets, and rewrites each edge's kind to the
+    model's validated label. Idempotent in spirit: re-running re-classifies (a depends_on
+    that became implements stays classifiable). Returns a RefineResult for transparency.
+    """
+    res = RefineResult()
+    repo = Path(index._repo) if getattr(index, "_repo", None) else None
+
+    # gather depends_on edges grouped by source FILE (via the src node's file_path)
+    rows = index.db.execute(
+        """
+        SELECT e.id, ns.file_path AS src_file, nd.file_path AS dst_file
+          FROM edges e
+          JOIN nodes ns ON ns.id = e.src_node
+          JOIN nodes nd ON nd.id = e.dst_node
+         WHERE e.kind = 'depends_on'
+           AND ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL
+        """
+    ).fetchall()
+    by_file: dict[str, list[tuple[int, str]]] = {}
+    for eid, src_file, dst_file in rows:
+        by_file.setdefault(src_file, []).append((eid, dst_file))
+
+    total = len(by_file)
+    for n, (src_file, edges) in enumerate(by_file.items(), start=1):
+        res.files_seen += 1
+        res.edges_considered += len(edges)
+        labels = _classify_file(provider, repo, src_file, [d for _, d in edges], file_byte_cap)
+        for eid, dst_file in edges:
+            kind = labels.get(dst_file)
+            if kind is None:
+                res.edges_unchanged += 1
+                continue
+            if kind not in _REFINE_LABELS or kind not in index.rules.edge_kinds:
+                res.dropped_labels += 1
+                res.edges_unchanged += 1
+                continue
+            if kind == "depends_on":
+                res.edges_unchanged += 1
+            else:
+                index.db.execute(
+                    "UPDATE edges SET kind=? WHERE id=?", (kind, eid)
+                )
+                res.edges_refined += 1
+            res.by_kind[kind] = res.by_kind.get(kind, 0) + 1
+        if progress is not None:
+            try:
+                progress(n, total)
+            except Exception:
+                pass
+    index.db.commit()
+    return res
+
+
+def _classify_file(provider, repo, src_file: str, targets: list[str],
+                   byte_cap: int) -> dict[str, str]:
+    """One model call: classify each dependency target of src_file. Returns {target: kind}.
+    Robust to a bad reply (returns {} -> all edges stay depends_on)."""
+    source = ""
+    if repo is not None:
+        try:
+            source = (repo / src_file).read_text(encoding="utf-8", errors="replace")[:byte_cap]
+        except OSError:
+            source = ""
+    user = (f"FILE: {src_file}\n\nIMPORTS (classify each):\n"
+            + "\n".join(f"- {t}" for t in targets)
+            + (f"\n\nSOURCE:\n{source}" if source else ""))
+    try:
+        resp = provider.complete(_SYSTEM, user, max_tokens=600)
+    except Exception:
+        return {}
+    return _parse_labels(resp.text, set(targets))
+
+
+def _parse_labels(text: str, valid_targets: set[str]) -> dict[str, str]:
+    """Extract {target: kind} from the model JSON. Only targets we actually asked about
+    are accepted (the model can't relabel something we didn't give it). Tolerant of a
+    prose-wrapped or fenced reply."""
+    data = _loads(text)
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, str] = {}
+    for e in data.get("edges", []) or []:
+        if not isinstance(e, dict):
+            continue
+        target = str(e.get("target") or "").strip()
+        kind = str(e.get("kind") or "").strip().lower()
+        if target in valid_targets and kind:
+            out[target] = kind
+    return out
+
+
+def _loads(text: str) -> Any:
+    if not isinstance(text, str):
+        return None
+    s = text.strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+    # a fenced or prose-wrapped object — grab the first balanced {...}
+    start = s.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(s)):
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(s[start:i + 1])
+                except Exception:
+                    return None
+    return None
