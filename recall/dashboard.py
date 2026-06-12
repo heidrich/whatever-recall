@@ -1668,6 +1668,7 @@ def _make_handler(repo: Path, idx_path: Path):
                 "version": ver,
                 "license": "PolyForm Noncommercial 1.0.0",
                 "copyright": "© 2026 Kathrin & Christian Mc Cain · McCain Digital",
+                "vendor_url": "https://mccain-digital.com",
             })
 
         def _serve_legal(self):

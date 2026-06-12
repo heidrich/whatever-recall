@@ -142,4 +142,4 @@ The engine — stamping, 3-level recall, drift/heal, bootstrap, dashboard, MCP, 
 
 Your *memory* (the graph in `.mind/`) remains yours and travels with every agent — the license protects the **engine**, not your data.
 
-© 2026 McCain Digital · Bavaria, Germany
+© 2026 [McCain Digital](https://mccain-digital.com) · Bavaria, Germany

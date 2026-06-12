@@ -3782,8 +3782,12 @@ T.about = () => {
       ${fact('Privacy','Your code, your index and every query stay on this machine. The index is one local SQLite file (<code>.mind/index.db</code>), the dashboard binds to localhost with a DNS-rebinding guard, there is no telemetry. The only thing ever checked online is your license/account — never your repo, your queries, or what you build.')}
 
     </div>`);
-  const head = () => { const el=document.getElementById('about-head'); if(el && ABOUT)
-    el.innerHTML = `<b>${esc(ABOUT.name)}</b> v${esc(ABOUT.version)} · ${esc(ABOUT.copyright)} · licensed ${esc(ABOUT.license)} — your project's memory: written at commit time, recalled offline, zero tokens.`; };
+  const head = () => { const el=document.getElementById('about-head'); if(!el || !ABOUT) return;
+    // the company name links home (owner: "mccain digital bitte noch verlinken")
+    const cr = ABOUT.vendor_url
+      ? esc(ABOUT.copyright).replace('McCain Digital', `<a href="${esc(ABOUT.vendor_url)}" target="_blank" rel="noopener">McCain Digital</a>`)
+      : esc(ABOUT.copyright);
+    el.innerHTML = `<b>${esc(ABOUT.name)}</b> v${esc(ABOUT.version)} · ${cr} · licensed ${esc(ABOUT.license)} — your project's memory: written at commit time, recalled offline, zero tokens.`; };
   if(ABOUT){ head(); return; }
   fetch('/api/about').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{ ABOUT=d; head(); })
     .catch(()=>{ const el=document.getElementById('about-head'); if(el) el.textContent='could not load product info'; });
