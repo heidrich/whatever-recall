@@ -190,6 +190,15 @@ On a fresh session, before substantive work:
    German-titled ADR-014 entirely). If you find German knowledge text, treat it like
    drift: offer the user a translation + restamp.
 
+8. **Never make the same mistake twice (Owner law, 2026-06-13).** When you cause, hit,
+   or fix a bug — or the user corrects you — **stamp the lesson** (commit trailer or
+   `recall stamp`) anchored to the files it concerns, so it surfaces in the next
+   pre-edit briefing on exactly those files. The mirror duty: the briefing exists so
+   you CHECK before you act — a mistake recall already knows about, made again, is a
+   process failure, not bad luck. If you catch yourself (or the user catches you)
+   repeating one, say so, strengthen the lesson (sharper anchors, a `warns_about`
+   edge), and only then continue.
+
 Tasks live in `.recall/tasks/*.md` (tool default) or `docs/plans|tasks|roadmap`
 (discovered). Frontmatter: `title`, `status` (open/done/dropped/deferred), `kind`
 (task/plan/feature/roadmap/sprint), `affects: [paths]`, `tags`. The body may hold a

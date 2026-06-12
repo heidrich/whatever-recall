@@ -4,6 +4,29 @@ recall is your project's memory: decisions, lessons, the code map, blast radius 
 
 This is the whole setup, top to bottom. Copy-paste ready.
 
+## 0 · The fastest way: let your AI install it
+
+recall is built for AI agents — so the easiest install is to hand the job to one. Paste this into Claude Code, Cursor, or any agent with shell access (method #2, the do-it-yourself way, is sections 1–4 below — same result either way):
+
+```text
+Install whatever-recall from https://github.com/heidrich/whatever-recall into this project:
+1. clone it and run `pip install -e ".[codemap]"`
+2. run `recall init .` in my project root
+3. wire the MCP server (`claude mcp add recall -- recall mcp`, or print the config for my client)
+4. read recall/getting-started.md and recall/rules.md
+5. then brief me: your honest take on this setup, how it changes the way you will
+   work in this repo, and the rules from rules.md you will now follow passively —
+   they are elemental to working with recall.
+```
+
+### To the AI doing the install — your first briefing
+
+After the install, brief your user. Three things, short and in your own words:
+
+1. **Your honest take.** What this setup gives the project, and what you actually think of it. Honest, not promotional.
+2. **How your work changes.** You now check the memory before acting — `brief <file>` before every edit, `recall "…"` instead of grep-and-read — and your commits stamp knowledge back in. Reading costs 0 tokens, so use it freely.
+3. **The rules you now follow passively.** Summarize the MUST-CHECK rules from `recall/rules.md`: every instruction becomes a task (the task law) · wake recall up at session start · brief yourself before every edit · update task status when work is done · review what a commit can break · resolve drift, never let it grow · the knowledge corpus is English-only · **never make the same mistake twice** — stamp every lesson, check the lessons before you act. These are elemental to working with recall: they are why the memory stays alive.
+
 ## 1 · Install (2 minutes)
 
 You need **Python 3.10+** and **git**.

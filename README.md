@@ -72,6 +72,10 @@ recall is governed by **one** human-readable file: [`recall/rules.md`](recall/ru
 
 ## Quickstart
 
+**The fastest way — let your AI install it:** recall is built for AI agents, so hand the job to one. The copy-paste prompt (install + MCP wiring + the first briefing your agent gives you) is at the top of **[recall/getting-started.md](recall/getting-started.md)** — and [whatever-recall.com/install](https://whatever-recall.com/install) has it with a copy button.
+
+Or do it yourself:
+
 ```bash
 git clone https://github.com/heidrich/whatever-recall.git
 cd whatever-recall
