@@ -857,6 +857,11 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .task-unres{display:inline-flex;align-items:center;gap:6px;margin:6px 0 2px;padding:3px 10px;
   font-family:var(--mono);font-size:var(--fs-micro);color:var(--oxblood-ink);background:var(--oxblood-soft);
   border-radius:var(--r-pill)}
+/* the MIRROR inconsistency: status:open but every step resolved — the task looks
+   finished, only the frontmatter flip was forgotten (Owner dogfood 2026-06-12). */
+.task-flip{display:inline-flex;align-items:center;gap:6px;margin:6px 0 2px;padding:3px 10px;
+  font-family:var(--mono);font-size:var(--fs-micro);color:var(--gold-ink);background:var(--mustard-soft);
+  border-radius:var(--r-pill)}
 .st-txt{flex:1;min-width:0}
 .task-card__subprev{font-family:var(--mono);font-size:var(--fs-micro);color:var(--mute-2);margin-top:6px}
 .task-filt{display:inline-flex;gap:2px;margin-bottom:16px;padding:3px;border-radius:10px;background:var(--ui-muted)}
@@ -2941,6 +2946,14 @@ function unresolvedChip(t){
   if(left<=0) return '';
   return `<span class="task-unres">${icon('warn',11)} ${left} step${left>1?'s':''} not resolved — tick [x], drop [-] or move [>] in the file</span>`;
 }
+/* mirror of unresolvedChip: open task, every step resolved -> the status flip was
+   probably forgotten. Server sends looks_done; fall back to the same arithmetic. */
+function flipChip(t){
+  const looks = t.looks_done!=null ? t.looks_done
+    : (t.status==='open' && t.total>0 && (t.resolved!=null?t.resolved:t.done)>=t.total);
+  if(!looks) return '';
+  return `<span class="task-flip">${icon('check',11)} all ${t.total} steps resolved — looks finished: set <b>status: done</b> (or drop/defer) in the file</span>`;
+}
 /* the sub-task checklist (read-only mirror of the markdown `- [ ]` items) */
 function subtaskList(subs){
   if(!subs||!subs.length) return '';
@@ -2958,7 +2971,7 @@ function taskCard(t){
       ${kindPill('task', t.task_kind||'task')}
       <span class="task-card__title">${esc(t.title)}</span>${impBadge(t.imp)}</div>
     ${t.why?`<div class="task-card__why">${esc(t.why)}</div>`:''}
-    ${progBar(t)}${unresolvedChip(t)}
+    ${progBar(t)}${unresolvedChip(t)}${flipChip(t)}
     ${aff?`<div class="task-card__aff">${aff}</div>`:''}
     <div class="task-meta">
       ${whoWhen('created', t.created_ts, t.created_by)}
@@ -2992,7 +3005,7 @@ function _renderTaskModal(t){
         ${(t.status==='done'||t.status==='dropped')?whoWhen(t.status==='dropped'?'dropped':'completed', t.closed_ts, t.closed_by):''}
         ${t.file?`<span class="ww"><span class="ww-l">file</span> ${filePathChip(t.file,{plain:true})}</span>`:''}
       </div>
-      ${progBar(t)}${unresolvedChip(t)}
+      ${progBar(t)}${unresolvedChip(t)}${flipChip(t)}
       ${subtaskList(t.subtasks)}
       ${aff?`<p class="lbl" style="margin-top:14px">Affects</p><div class="task-card__aff">${aff}</div>`:''}
       ${t.why?`<p class="lbl" style="margin-top:14px">Plan</p><div class="body md">${mdToHtml(taskBodyNoChecklist(t))}</div>`:''}
@@ -3013,15 +3026,21 @@ T.tasks = () => {
     `${t.title} ${(t.tags||[]).join(' ')} ${(t.affects||[]).join(' ')} ${t.why||''}`
       .toLowerCase().includes(taskQuery);
   const shown = (taskFilter==='all' ? all : all.filter(t=>t.status===taskFilter)).filter(matches);
+  // forgotten flips FIRST (they are actionable in one line), then the 30d-stale alarm
+  const flips = all.filter(t=>flipChip(t)!=='');
+  const flipAlert = flips.length
+    ? `<div class="task-alert">${icon('check',13)} ${flips.length} open task${flips.length>1?'s have':' has'} every step resolved — ${flips.length>1?'they look':'it looks'} finished. Flip <b>status: done</b> (or drop/defer) in the file${flips.length>1?'s':''}.</div>`
+    : '';
   const alert = stale.length
     ? `<div class="task-alert">${icon('warn',13)} ${stale.length} open task${stale.length>1?'s':''} untouched &gt; 30 days — check whether ${stale.length>1?'they were':'it was'} done, dropped or deferred and update the status.</div>`
-    : (counts.open ? `<div class="task-alert ok">${counts.open} open task${counts.open>1?'s':''} · all recently touched</div>`
-      : `<div class="task-alert ok">no open tasks — the backlog is clear</div>`);
+    : (flips.length ? ''  // the flip alert already covers the "look at your statuses" nudge
+      : (counts.open ? `<div class="task-alert ok">${counts.open} open task${counts.open>1?'s':''} · all recently touched</div>`
+        : `<div class="task-alert ok">no open tasks — the backlog is clear</div>`));
   setPanel('tasks', `
     <div class="phead"><div><h2>Plans, wired to the <span class="serif">code</span>.</h2></div>
       <div class="lead-wrap"><div class="lead">tasks/plans/roadmaps live in .recall/tasks (or docs/) · indexed + linked to the files they affect · ADR-017</div></div></div>
     <div class="pbody" style="padding-bottom:28px">
-      ${alert}
+      ${flipAlert}${alert}
       <div class="task-filt">
         <button class="${taskFilter==='all'?'on':''}" onclick="setTaskFilter('all')">All ${counts.all}</button>
         <button class="${taskFilter==='open'?'on':''}" onclick="setTaskFilter('open')">Open ${counts.open}</button>
@@ -3761,11 +3780,11 @@ T.about = () => {
         <div class="ui-card__desc" style="font-size:13px;line-height:1.6" id="about-head">loading…</div>
       </div></div>
 
-      ${legalCard('License — PolyForm Noncommercial 1.0.0',
-        'Free for noncommercial use: personal projects, study, research, teaching, charitable/educational/public organizations. <b>Any commercial use requires a commercial license.</b>',
+      ${legalCard('License — Business Source License 1.1',
+        'Source-available: free for noncommercial use (personal, study, research, teaching, nonprofits) and for development/testing/evaluation incl. the 14-day trial. <b>Commercial production use needs an active subscription</b> — and every released version automatically becomes Apache 2.0 open source three years after its release.',
         'license','LICENSE')}
       ${legalCard('Commercial use',
-        'Using recall inside a for-profit workflow or product, offering it (or a service built on it) to paying customers, or bundling/redistributing it commercially — all need a commercial license. Plans are flat per seat band (Solo / Team / Studio) and start with a 14-day full trial.',
+        'One seat per person using recall, flat per seat band (Solo / Team / Studio), every plan has every feature. Using recall to offer a competing product or service is never licensed. Details + the 3-year open-source promise: COMMERCIAL.md.',
         'commercial','COMMERCIAL.md')}
 
       <div class="ui-card" style="margin-bottom:16px">
@@ -3787,7 +3806,12 @@ T.about = () => {
     const cr = ABOUT.vendor_url
       ? esc(ABOUT.copyright).replace('McCain Digital', `<a href="${esc(ABOUT.vendor_url)}" target="_blank" rel="noopener">McCain Digital</a>`)
       : esc(ABOUT.copyright);
-    el.innerHTML = `<b>${esc(ABOUT.name)}</b> v${esc(ABOUT.version)} · ${cr} · licensed ${esc(ABOUT.license)} — your project's memory: written at commit time, recalled offline, zero tokens.`; };
+    // who is behind the product + the one real mail domain (owner 2026-06-12:
+    // "klar und deutlich, dass recall ein Produkt von mccain-digital ist")
+    const note = ABOUT.vendor_note
+      ? ` · <a href="${esc(ABOUT.vendor_url||'https://mccain-digital.com')}" target="_blank" rel="noopener">${esc(ABOUT.vendor_note)}</a>${ABOUT.support_email?` (support: ${esc(ABOUT.support_email)} · billing: ${esc(ABOUT.payment_email||'')})`:''}`
+      : '';
+    el.innerHTML = `<b>${esc(ABOUT.name)}</b> v${esc(ABOUT.version)} · ${cr} · licensed ${esc(ABOUT.license)} — your project's memory: written at commit time, recalled offline, zero tokens.${note}`; };
   if(ABOUT){ head(); return; }
   fetch('/api/about').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{ ABOUT=d; head(); })
     .catch(()=>{ const el=document.getElementById('about-head'); if(el) el.textContent='could not load product info'; });

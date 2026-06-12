@@ -216,13 +216,24 @@ def cmd_precommit_check(args) -> int:
     if not staged:
         return 0
     r = idx.review(files=staged)
-    if not r["risk_files"]:
-        return 0
-    print(_c("recall · pre-commit", C.MUSTARD) + _c("  you are touching load-bearing code:", C.B))
-    for rf in r["risk_files"]:
-        why = ", ".join(rf["reasons"])
-        print(f"  {_c('⚠', C.MUSTARD)} {rf['file']} {_c('— ' + why, C.DIM)}")
-    print(_c("  `recall brief <file>` for the full briefing before you commit.", C.DIM))
+    if r["risk_files"]:
+        print(_c("recall · pre-commit", C.MUSTARD) + _c("  you are touching load-bearing code:", C.B))
+        for rf in r["risk_files"]:
+            why = ", ".join(rf["reasons"])
+            print(f"  {_c('⚠', C.MUSTARD)} {rf['file']} {_c('— ' + why, C.DIM)}")
+        print(_c("  `recall brief <file>` for the full briefing before you commit.", C.DIM))
+    # forgotten status flips (Owner dogfood 2026-06-12: "massenweise offene tasks" that
+    # were long finished). One line per candidate, every commit, until the file is flipped
+    # — structurally impossible to miss, still warn-only.
+    from recall.tasks import flip_candidates
+    flips = flip_candidates(idx)
+    if flips:
+        print(_c("recall · tasks", C.MUSTARD)
+              + _c(f"  {len(flips)} open task{'s' if len(flips) > 1 else ''} look{'' if len(flips) > 1 else 's'} finished (every step resolved) — flip status: done:", C.B))
+        for f in flips[:6]:
+            print(f"  {_c('✓', C.MUSTARD)} {f['title'][:70]} {_c('— ' + (f['file'] or ''), C.DIM)}")
+        if len(flips) > 6:
+            print(_c(f"  … and {len(flips) - 6} more (dashboard → Tasks)", C.DIM))
     return 0  # warn only, never block
 
 

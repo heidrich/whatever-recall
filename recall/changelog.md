@@ -32,6 +32,9 @@ The first public release — everything below ships on day one.
 - **`recall dashboard`** — the browsable wiki: Overview, Wiki (causal chains
   down to the diff), Tasks, Git, Drift, Code (with the pre-edit briefing),
   Product tree, Search, and this Changelog. Live pulse, one design system.
+- **Tasks police their own status.** A task with every step ticked but still
+  marked `open` gets flagged — in the dashboard and as a one-line nudge on
+  every commit — until you flip it to done. Your backlog can't quietly rot.
 - **`recall shortcut`** — a desktop launcher (with the recall icon) that starts
   the dashboard with a double-click. No terminal, no AI needed.
 
@@ -51,5 +54,7 @@ The first public release — everything below ships on day one.
 - **Offline license tokens** (Ed25519): the tool verifies your license without
   ever seeing your code — when a trial ends, reading your memory keeps working;
   stamping new knowledge needs a plan.
-- The full source stays public on GitHub (PolyForm Noncommercial) — read every
-  line that touches your repo before you run it.
+- The full source stays public on GitHub (Business Source License 1.1) — read
+  every line that touches your repo before you run it. Noncommercial use is
+  free; commercial production use needs a plan; and every version becomes
+  Apache 2.0 open source three years after its release.

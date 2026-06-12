@@ -861,16 +861,16 @@ def test_about_reports_product_facts(served):
     assert status == 200
     d = json.loads(body)
     assert d["name"] == "whatever-recall"
-    assert d["license"].startswith("PolyForm Noncommercial")
+    assert d["license"].startswith("Business Source License")
     assert d["version"] and d["copyright"]
 
 
 def test_legal_serves_license_and_commercial_verbatim(served):
     base, _repo = served
     status, body = _get(base, "/api/legal?doc=license")
-    assert status == 200 and "PolyForm Noncommercial License 1.0.0" in body
+    assert status == 200 and "Business Source License 1.1" in body
     status, body = _get(base, "/api/legal?doc=commercial")
-    assert status == 200 and "Commercial License" in body
+    assert status == 200 and "Commercial Use" in body
     status, body = _get(base, "/api/legal?doc=evil")
     assert status == 400
 

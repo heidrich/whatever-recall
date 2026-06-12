@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AI-native project memory. Write-time stamping, token-free recall. The code is the wiki."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "PolyForm-Noncommercial-1.0.0" }
+license = { text = "BUSL-1.1" }
 authors = [{ name = "Kathrin & Christian Mc Cain — McCain Digital", email = "info@mccain-digital.com" }]
 keywords = ["ai", "memory", "code-search", "developer-tools", "rag"]
 

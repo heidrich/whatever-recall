@@ -224,6 +224,31 @@ def index_tasks(index, repo: str | Path, stats: dict | None = None) -> dict[str,
 
 
 # ---------------------------------------------------------------- status drift
+def looks_done(status: str, subtasks: list[dict]) -> bool:
+    """An OPEN task whose every checklist step is resolved ([x]/[-]/[>]) almost certainly
+    just never had its frontmatter flipped — the exact dogfood moment the Owner caught
+    twice ("why are finished tasks still open?"). Pure arithmetic (ADR-014); this only
+    SUGGESTS the flip, it never applies it (the status stays the author's call)."""
+    return status == "open" and bool(subtasks) and all(
+        s.get("state", "done" if s.get("done") else "open") != "open" for s in subtasks
+    )
+
+
+def flip_candidates(index) -> list[dict]:
+    """Every open task that looks finished (see looks_done) — the dashboard banner and
+    the pre-commit nudge read this, so a forgotten status flip cannot hide. Model-free."""
+    out: list[dict] = []
+    for nid, title, body, fp, facets in index.db.execute(
+        "SELECT id, title, body, file_path, facets FROM nodes WHERE kind='task'"
+    ).fetchall():
+        status = _status_from_facets(facets)
+        subs = parse_subtasks(body or "")
+        if looks_done(status, subs):
+            out.append({"node_id": nid, "title": title,
+                        "file": (fp or "").replace("\\", "/"), "steps": len(subs)})
+    return out
+
+
 def stale_open_tasks(index, *, now_ts: int, stale_days: int = _STALE_DAYS) -> list[dict]:
     """Open tasks whose file hasn't changed in `stale_days` — drift candidates for the
     dashboard alert. Deterministic (timestamps only), model-free.

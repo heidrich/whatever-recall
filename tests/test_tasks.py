@@ -4,6 +4,7 @@ from __future__ import annotations
 from recall import Index
 from recall.tasks import (
     parse_task, index_tasks, stale_open_tasks, _split_frontmatter, parse_subtasks,
+    looks_done, flip_candidates,
 )
 
 
@@ -261,6 +262,36 @@ def test_clear_tasks_removes_only_tasks(tmp_path):
 
 
 # ----------------------------------------------------------------- status drift
+def test_looks_done_open_task_all_steps_resolved():
+    # the Owner dogfood moment: every box ticked/dropped/moved, frontmatter never flipped
+    subs = parse_subtasks("- [x] a\n- [-] b\n- [>] c\n")
+    assert looks_done("open", subs) is True
+    assert looks_done("done", subs) is False      # already flipped -> no nudge
+    assert looks_done("deferred", subs) is False  # deliberate parking -> no nudge
+
+
+def test_looks_done_needs_steps_and_full_resolution():
+    assert looks_done("open", []) is False  # no checklist -> nothing to infer from
+    subs = parse_subtasks("- [x] a\n- [ ] b\n")
+    assert looks_done("open", subs) is False  # one open box -> genuinely open
+
+
+def test_flip_candidates_finds_forgotten_flip(tmp_path):
+    repo = tmp_path / "p"
+    (repo / ".recall" / "tasks").mkdir(parents=True)
+    (repo / ".recall" / "tasks" / "f.md").write_text(
+        "---\ntitle: finished but never flipped\nstatus: open\nkind: task\n---\n"
+        "- [x] build it\n- [x] verify it\n", encoding="utf-8")
+    (repo / ".recall" / "tasks" / "g.md").write_text(
+        "---\ntitle: genuinely open\nstatus: open\nkind: task\n---\n"
+        "- [x] step one\n- [ ] step two\n", encoding="utf-8")
+    idx = Index.open(":memory:", repo=repo)
+    index_tasks(idx, repo)
+    cands = flip_candidates(idx)
+    assert [c["title"] for c in cands] == ["finished but never flipped"]
+    assert cands[0]["steps"] == 2
+
+
 def test_stale_open_tasks_flags_old_open_tasks():
     idx = Index.open(":memory:")
     # an open task created 40 days ago

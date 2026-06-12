@@ -135,11 +135,15 @@ The engine — stamping, 3-level recall, drift/heal, bootstrap, dashboard, MCP, 
 
 ## License
 
-**[PolyForm Noncommercial 1.0.0](LICENSE)** — source-available, not open-source.
+**[Business Source License 1.1](LICENSE)** — source-available, with a real open-source promise.
 
-- **Noncommercial = free:** hobby, study, research, teaching, nonprofit/public organizations — read, use, modify, share, at no cost.
-- **Commercial = paid license:** any business use needs a commercial license — [COMMERCIAL.md](COMMERCIAL.md) · [whatever-recall.com/pricing](https://whatever-recall.com/pricing). Solo $10/mo · Team (up to 10) $100/mo · Studio (up to 25) $250/mo — every plan has every feature.
+- **Noncommercial = free:** hobby, study, research, teaching, nonprofit organizations — read, use, modify, share, at no cost. Development, testing and evaluation (incl. the 14-day trial) are free too.
+- **Commercial production use = subscription:** one seat per person — [COMMERCIAL.md](COMMERCIAL.md) · [whatever-recall.com/pricing](https://whatever-recall.com/pricing). Solo $10/mo · Team (up to 10) $100/mo · Studio (up to 25) $250/mo — every plan has every feature.
+- **The 3-year promise:** every released version automatically becomes **Apache 2.0** three years after its release — your stack can never end up in a proprietary dead end.
+- **Not licensed, ever:** using recall to offer a competing product or service.
 
 Your *memory* (the graph in `.mind/`) remains yours and travels with every agent — the license protects the **engine**, not your data.
+
+whatever-recall is a product & service of [McCain Digital](https://mccain-digital.com). All official email comes from **@mccain-digital.com** — support: [support@mccain-digital.com](mailto:support@mccain-digital.com) · billing & refunds: [payment@mccain-digital.com](mailto:payment@mccain-digital.com).
 
 © 2026 [McCain Digital](https://mccain-digital.com) · Bavaria, Germany

@@ -1,49 +1,58 @@
-# Commercial License
+# Commercial Use
 
-whatever-recall is released under the [PolyForm Noncommercial 1.0.0](LICENSE)
-license. That license covers **noncommercial use only** — personal projects,
-study, research, teaching, and charitable / educational / public organizations.
+whatever-recall is released under the [Business Source License 1.1](LICENSE)
+(BSL). The source is public — read every line before you run it — and the
+license is honest about who pays:
 
-**Any commercial use requires a separate commercial license.** This includes,
-but is not limited to:
+- **Noncommercial use is free.** Personal projects, study, academic research,
+  teaching, nonprofit organizations.
+- **Development, testing and evaluation are free** — including the
+  [14-day full-feature trial](https://whatever-recall.com) (no card).
+- **Commercial production use requires an active subscription** — one seat per
+  person using recall: [whatever-recall.com/pricing](https://whatever-recall.com/pricing).
+- **Competing with recall is not licensed.** You may not use the Licensed Work
+  to offer a product or service that competes with it — at any tier, ever.
 
-- using recall inside a for-profit company's workflow or product,
-- offering recall (or a service built on it) to paying customers,
-- bundling or redistributing recall in a commercial product.
+## The plans (subscription = your commercial license)
 
-If you are not sure whether your use is commercial, assume it is and reach out.
+| Plan | Seats | Price |
+|------|-------|-------|
+| **Solo** | 1 developer | $10/mo · $100/yr |
+| **Team** | up to 10 | $100/mo · $800/yr |
+| **Studio** | up to 25 (+ priority support) | $250/mo · $2,000/yr |
 
-## Why a commercial license
+Every plan has every feature — tiers differ only in seats. More than 25 seats,
+embedding recall in a product you ship, or other special arrangements:
+talk to us.
 
-The engine core is small on purpose; the value is the accumulated graph and the
-open standard it lives in. The commercial license funds the ongoing work and
-keeps recall sustainable — while noncommercial users always stay free.
+## Education & research — free, forever
 
-## Tiers (indicative — final pricing on request)
+Schools, colleges and universities use recall for **teaching and academic
+research at no charge — no fees, ever**. We'd love to hear from you:
+[support@mccain-digital.com](mailto:support@mccain-digital.com).
 
-| Tier | For | Notes |
-|------|-----|-------|
-| **Indie** | a single developer / very small team using recall commercially | seat-based |
-| **Team** | a company using recall across a team | per-seat or per-org |
-| **Platform** | embedding recall in a product you ship to customers | redistribution + support |
+The one honest line: if that research turns into a **product, company or
+spin-off that earns money**, that's commercial use — from that point on it
+needs a regular subscription like everyone else.
 
-A free beta period applies before paid Live (see the beta launch plan); early
-adopters get a standing discount.
+## The 3-year promise
 
-## What you get
-
-- the right to use recall commercially under the tier you license,
-- updates within your license term,
-- a clear, auditable governance file ([`recall/rules.md`](recall/rules.md)) — no
-  hidden behavior.
+Under the BSL, **every released version automatically becomes open source
+(Apache 2.0) three years after its release.** Your subscription buys today's
+engine and its updates; the code you depend on can never end up locked in a
+proprietary dead end.
 
 ## What we never get
 
 recall runs entirely on your machine. **No data ever leaves your server** — not
 your code, not your queries, not what you build. The only thing a license check
 verifies is your account/entitlement. We genuinely do not know what you do with
-it.
+it. The governance file ([`recall/rules.md`](recall/rules.md)) is public — no
+hidden behavior.
 
 ## Contact
 
-Kathrin & Christian Mc Cain — McCain Digital — info@mccain-digital.com
+whatever-recall is a product & service of
+[McCain Digital](https://mccain-digital.com).
+Licensing & billing: payment@mccain-digital.com · everything else:
+support@mccain-digital.com — all official mail comes from @mccain-digital.com.

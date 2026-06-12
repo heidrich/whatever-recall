@@ -56,7 +56,7 @@ from urllib.parse import parse_qs, urlparse
 
 from recall.engine import Index
 from recall.freshness import drift_counts
-from recall.tasks import parse_subtasks
+from recall.tasks import looks_done, parse_subtasks
 
 _HERE = Path(__file__).resolve().parent
 _HTML = _HERE / "dashboard.html"
@@ -574,6 +574,9 @@ def build_snapshot(idx: Index, repo: Path) -> dict:
             "subtasks": subtasks, "done": done_n, "total": len(subtasks),
             "moved": moved_n, "dropped": dropped_n,
             "resolved": done_n + moved_n + dropped_n,
+            # every step resolved but status still open -> the file's frontmatter was
+            # probably never flipped. The UI nudges; the flip stays the author's call.
+            "looks_done": looks_done(status, subtasks),
             "created_ts": ga.get("created_ts") or ts, "created_by": ga.get("created_by"),
             "closed_ts": closed_ts, "closed_by": closed_by,
         })
@@ -1666,9 +1669,15 @@ def _make_handler(repo: Path, idx_path: Path):
             self._json(200, {
                 "name": "whatever-recall",
                 "version": ver,
-                "license": "PolyForm Noncommercial 1.0.0",
+                "license": "Business Source License 1.1",
                 "copyright": "© 2026 Kathrin & Christian Mc Cain · McCain Digital",
                 "vendor_url": "https://mccain-digital.com",
+                # who is behind the product + the ONE real mail domain (owner
+                # 2026-06-12) — the About tab renders this verbatim.
+                "vendor_note": "a product & service of McCain Digital — all support, "
+                               "info & payment mail comes from @mccain-digital.com",
+                "support_email": "support@mccain-digital.com",
+                "payment_email": "payment@mccain-digital.com",
             })
 
         def _serve_legal(self):
