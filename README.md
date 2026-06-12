@@ -1,8 +1,12 @@
 # whatever-recall
 
-**AI-native project memory. The code is its own memory.**
+**AI-native project memory. Move the intelligence from read-time to write-time.**
 
-Every *"why is this here?"* makes your AI grep and re-read whole files — ~214,000 tokens for three questions on a real repo. recall makes the codebase itself smart **at write-time**, while the AI still knows why — so reading it back can be dead-dumb: plain SQLite full-text search, no model, no embeddings. The same three answers cost **152 tokens**, arrive in **~2 ms**, and every one is **traceable to the commit it was written against**.
+Stop paying your AI to re-read the same files. Every *"why is this here?"* makes it grep and re-read whole files — **~214,000 tokens for just three questions** on a real production repo.
+
+recall makes the codebase itself smart **at write-time** — while the AI is already in there fixing the bug and still *knows why*. It stamps that knowledge (the decision, the why, the anchors) directly onto the git commit.
+
+Reading it back is dead-simple, instant and free: plain SQLite full-text search. **The same three answers cost 152 tokens, arrive in ~2 ms, and every one is traceable to the commit it was written against.** No model calls. No embeddings. No API costs.
 
 **[whatever-recall.com](https://whatever-recall.com)** · [How it works](https://whatever-recall.com/how-it-works) · [Pricing](https://whatever-recall.com/pricing) — every plan has every feature, scaled only by seats; 14-day full trial, no card.
 
@@ -10,25 +14,25 @@ Part of the `whatever` family: [whatever-cms](https://whatever-cms.app) · whate
 
 ---
 
-## The idea in one move
+## The paradigm shift: write-time vs. read-time
 
 > **Move the intelligence from the guessing moment (read-time — expensive, vague) to the knowing moment (write-time — cheap, exact).**
 
-- **write-time:** while the AI works and already understands — fixing the bug, making the call — it *stamps* the knowledge onto the commit: the decision, the why, the **anchors** (the technical terms it concerns). Costs almost nothing; the context is already in its head.
-- **read-time:** a **dead-dumb, token-free reader** (SQLite FTS5, zero model calls) just looks the finished knowledge up. The intelligence lives in the index, not in the reader.
+- **The old way (read-time): expensive & vague.** The AI guesses. Every prompt forces grep-and-read, a local embedding model or cloud RAG over your repo — and the cost grows with the codebase.
+- **The recall way (write-time): cheap & exact.** While the AI works and already understands — fixing the bug, making the call — it *stamps* the knowledge onto the commit: the decision, the why, the **anchors** (the technical terms it concerns). Costs almost nothing; the context is already in its head. The reader is a **dead-dumb, token-free lookup** (SQLite FTS5, zero model calls) — the intelligence lives in the index, not in the reader.
 
-Because the reader is dumb, it is the fast, precise, cheap one — and the harder the question, the wider the gap, because a dumb lookup stays flat while grep-and-read grows with the codebase. No local embedding model needed: that was only ever required *because* the reader had to guess.
+**Why this wins:** a dumb lookup stays flat and free while grep-and-read grows with every file you add — so the harder the question and the bigger the repo, the wider the gap. No local embedding model needed: that was only ever required *because* the reader had to guess.
 
 ## Measured, not claimed
 
-Cold-start on two live production repos (a 240-commit app with 43,722 anchors · a 668-commit CMS with 108,627 anchors), three real questions, no recall trailers planted:
+Cold-start on two live production repos (a 240-commit app with 43,722 anchors · a 668-commit CMS with 108,627 anchors), three real architectural questions, no recall trailers planted:
 
-| metric | value |
-|---|---|
-| tokens for the same three answers | **152 vs ~214,000** (~1,400× fewer) |
-| time to the answer | **~2.18 ms vs ~147 ms** (~67× faster) |
-| recall latency at 108,627 anchors | **0.25 ms median** |
-| model tokens at read-time | **0** — no model, no embeddings, no API key |
+| metric | grep-and-read | whatever-recall | the gap |
+|---|---|---|---|
+| tokens for the same three answers | ~214,000 | **152** | **~1,400× fewer** |
+| time to the answer | ~147 ms | **~2.18 ms** | **~67× faster** |
+| latency at 108,627 anchors | grows with the repo | **0.25 ms median** | stays flat |
+| model tokens at read-time | every prompt pays | **0** | no model, no embeddings, no API key |
 
 The methodology ships with this repo — run it yourself: `python experiments/bench_v2.py` (source-verified ground truth, exact file+symbol judging). A CI quality gate (`--gate`) enforces retrieval floors on every change.
 
