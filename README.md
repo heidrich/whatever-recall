@@ -10,6 +10,8 @@ Reading it back is dead-simple, instant and free: plain SQLite full-text search.
 
 **[whatever-recall.com](https://whatever-recall.com)** · [How it works](https://whatever-recall.com/how-it-works) · [Pricing](https://whatever-recall.com/pricing) — every plan has every feature, scaled only by seats; 14-day full trial, no card.
 
+**[Why we built this — a letter from Christian →](LETTER.md)**
+
 Part of the `whatever` family: [whatever-cms](https://whatever-cms.app) · whatever360 · **whatever-recall**.
 
 ---
