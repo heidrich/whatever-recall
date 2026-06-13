@@ -14,6 +14,18 @@ def _git(repo, *args):
                    capture_output=True, text=True)
 
 
+def _require_codemap():
+    """Skip ONLY when the [codemap] extra is genuinely not installed.
+
+    Launch-audit lesson (2026-06-13): tests that `skip`/`return` on `code_symbols == 0`
+    are BLIND — they can't tell 'tree-sitter absent' from 'tree-sitter present but
+    silently yielding 0 symbols' (the get_parser/bytes regression that shipped a broken
+    parser past a green suite). So: skip up front iff the extra is truly absent; then the
+    caller ASSERTS code_symbols > 0, turning a silent-zero parser into a FAILING test."""
+    pytest.importorskip("tree_sitter", reason="[codemap] extra not installed")
+    pytest.importorskip("tree_sitter_language_pack", reason="[codemap] extra not installed")
+
+
 def _make_repo(tmp_path):
     repo = tmp_path / "proj"
     repo.mkdir()
@@ -94,11 +106,13 @@ def test_commit_files_become_co_changed_and_useful(tmp_path):
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "feat: handler calls guard")  # both in ONE commit
 
+    _require_codemap()
     idx = Index.open(":memory:", repo=repo)
     init(idx, repo)
     cc = idx.db.execute("SELECT COUNT(*) FROM edges WHERE kind='co_changed'").fetchone()[0]
-    if idx.stats()["by_kind"].get("code-symbol", 0) == 0:
-        pytest.skip("tree-sitter not installed — no code nodes to link")
+    # with [codemap] installed, a 0-symbol result means the parser silently broke — FAIL.
+    assert idx.stats()["by_kind"].get("code-symbol", 0) > 0, \
+        "codemap installed but 0 code symbols — the parser regressed (silent zero)"
     assert cc >= 2  # symmetric handler<->guard
     # the relation surfaces both ways
     pairs = {(a, b) for a, b in idx.db.execute(
@@ -286,6 +300,40 @@ def test_incremental_update_records_author_of_new_commit(tmp_path):
 #      the symbol is findable by what it DOES, not just by its name;
 #   3. housekeeping commits land on the quiet 'chore' tag.
 
+def test_tree_sitter_parser_accepts_bytes_and_yields_symbols(tmp_path):
+    """Regression (audit 2026-06-13): on a fresh `pip install .[codemap]` the very
+    first command `recall init .` crashed — tree-sitter 0.25.x's get_parser()
+    wrapper rejects `bytes` ("'bytes' object is not an instance of 'str'") and the
+    code map silently produced ZERO symbols. Every other code-symbol test SKIPS
+    when code_symbols==0, so the break stayed invisible. This test REQUIRES the
+    codemap extra and FAILS (not skips) if the parser path is broken."""
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_language_pack")
+    from recall.bootstrap import _load_tree_sitter
+    parser_for = _load_tree_sitter()
+    assert parser_for is not None, "codemap extra installed but _load_tree_sitter returned None"
+    parser = parser_for("python")
+    assert parser is not None, "no python parser built from the language pack"
+    # the whole symbol pipeline slices raw bytes — parse(bytes) MUST work
+    tree = parser.parse(b"def add(a, b):\n    return a + b\n")
+    assert tree.root_node.type == "module"
+    assert len(tree.root_node.children) >= 1
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    (repo / "app.py").write_text(
+        "def add(a, b):\n    return a + b\n\nclass Bank:\n    def deposit(self, n):\n        self.balance += n\n",
+        encoding="utf-8",
+    )
+    idx = Index.open(":memory:", repo=repo)
+    n = init(idx, repo)
+    # with the codemap extra present, init MUST find real symbols — not 0
+    assert n["code_symbols"] >= 3, f"expected add/Bank/deposit, got {n['code_symbols']}"
+    syms = {r[0] for r in idx.db.execute(
+        "SELECT symbol FROM nodes WHERE kind='code-symbol'").fetchall()}
+    assert {"add", "Bank", "deposit"} <= syms
+
+
 def test_docstring_is_captured_into_the_code_symbol(tmp_path):
     repo = tmp_path / "proj"
     repo.mkdir()
@@ -295,10 +343,11 @@ def test_docstring_is_captured_into_the_code_symbol(tmp_path):
         '    return raw\n',
         encoding="utf-8",
     )
+    _require_codemap()
     idx = Index.open(":memory:", repo=repo)
     n = init(idx, repo)
-    if n["code_symbols"] == 0:
-        pytest.skip("tree-sitter not available")
+    assert n["code_symbols"] > 0, \
+        "codemap installed but 0 code symbols — the parser regressed (silent zero)"
     row = idx.db.execute(
         "SELECT body FROM nodes WHERE kind='code-symbol' AND symbol='normalize_widget'"
     ).fetchone()
@@ -382,11 +431,12 @@ def _make_import_repo(tmp_path):
 def test_bootstrap_builds_dependency_edges(tmp_path):
     """handler.py imports guards.py -> a depends_on edge between their code-symbols.
     Skips cleanly if tree-sitter is absent (no code map, no edges)."""
+    _require_codemap()
     repo = _make_import_repo(tmp_path)
     idx = Index.open(":memory:", repo=repo)
     st = init(idx, repo)
-    if st["code_symbols"] == 0:
-        return  # tree-sitter not installed — nothing to connect
+    assert st["code_symbols"] > 0, \
+        "codemap installed but 0 code symbols — the parser regressed (silent zero)"
     assert st.get("dep_edges", 0) >= 1
     # the edge points handler.py -> pkg/guards.py
     rows = idx.db.execute(
@@ -398,10 +448,11 @@ def test_bootstrap_builds_dependency_edges(tmp_path):
 
 
 def test_dependency_edges_are_idempotent_on_reinit(tmp_path):
+    _require_codemap()
     repo = _make_import_repo(tmp_path)
     idx = Index.open(":memory:", repo=repo)
-    if init(idx, repo)["code_symbols"] == 0:
-        return
+    assert init(idx, repo)["code_symbols"] > 0, \
+        "codemap installed but 0 code symbols — the parser regressed (silent zero)"
     n1 = idx.db.execute("SELECT COUNT(*) FROM edges WHERE kind='depends_on'").fetchone()[0]
     init(idx, repo)  # rebuild
     n2 = idx.db.execute("SELECT COUNT(*) FROM edges WHERE kind='depends_on'").fetchone()[0]

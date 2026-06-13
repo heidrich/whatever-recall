@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -55,6 +56,17 @@ def _find_repo(start: str | Path = ".") -> Path:
         if (cand / ".git").exists() or (cand / MIND_DIR).exists():
             return cand
     return Path(start).resolve()
+
+
+def _repo_from_args(args) -> Path:
+    """Resolve the target repo from either an optional positional `path` or `--repo`.
+
+    Most subcommands take `--repo`; the hand-typed ones (init/dashboard/shortcut/…)
+    ALSO accept a positional path so `recall <cmd> .` works like `recall init .`
+    (audit 2026-06-13: `recall shortcut .` used to error 'unrecognized arguments').
+    Positional wins when given; otherwise --repo; otherwise here."""
+    pos = getattr(args, "path", None)
+    return _find_repo(pos or getattr(args, "repo", None) or ".")
 
 
 def _open_existing(repo: Path) -> Index | None:
@@ -109,7 +121,7 @@ def cmd_init(args) -> int:
 
 
 def cmd_recall(args) -> int:
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index — run `recall init` in {repo} first", C.RED))
@@ -125,7 +137,7 @@ def cmd_recall(args) -> int:
 def cmd_brief(args) -> int:
     """Wave A — the Pre-Edit Briefing. Everything recall knows about ONE file, before
     you touch it: why it is the way it is, what breaks, which open tasks affect it."""
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index — run `recall init` in {repo} first", C.RED))
@@ -141,7 +153,7 @@ def cmd_brief(args) -> int:
 def cmd_contested(args) -> int:
     """Wave B — uncertainty hotspots: the code the team kept changing (high churn AND
     entanglement). Answers 'where does the team burn time', model-free (ADR-019)."""
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index — run `recall init` in {repo} first", C.RED))
@@ -164,7 +176,7 @@ def cmd_explain(args) -> int:
     """Wave C — "explain me this repo" (ADR-020). The generated orientation path a new
     dev or a fresh AI session needs: load-bearing files, must-know decisions, what's in
     progress, where time burns. Read-only, model-free."""
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index — run `recall init` in {repo} first", C.RED))
@@ -182,7 +194,7 @@ def cmd_review(args) -> int:
     commit touched, what brief() shows for one file (what breaks / why / open tasks /
     drift) and singles out the RISK files (load-bearing + many dependents + open task).
     `--for-prompt` renders a PR-markdown block. Read-only, model-free."""
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index — run `recall init` in {repo} first", C.RED))
@@ -202,7 +214,7 @@ def cmd_precommit_check(args) -> int:
     """Wave D — the pre-commit warning. Reviews the STAGED files (no commit yet) and warns
     on any risk file. Always exits 0 — it warns, it never blocks the commit (a memory tool
     must never get between you and git)."""
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         return 0  # no memory yet — nothing to warn about, never block
@@ -238,7 +250,7 @@ def cmd_precommit_check(args) -> int:
 
 
 def cmd_stamp(args) -> int:
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo) or Index.open(_index_path(repo), repo=repo)
     r = idx.stamp(
         title=args.title,
@@ -256,7 +268,7 @@ def cmd_stamp(args) -> int:
 
 
 def cmd_freshen(args) -> int:
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index — run `recall init` in {repo} first", C.RED))
@@ -306,7 +318,7 @@ def cmd_mcp(args) -> int:
         print(_c("\n  .mcp.json (Claude Code project config / checked in for the team):", C.DIM))
         print('    {"mcpServers": {"recall": {"command": "recall", "args": ["mcp"]}}}')
         print(_c("\n  Cursor (~/.cursor/mcp.json) and most other clients use the same shape.", C.DIM))
-        print(_c("\n  Tools: recall · brief · explain · stamp · contested · freshen", C.DIM))
+        print(_c("\n  Tools: recall · brief · explain · stamp · contested · freshen · dashboard", C.DIM))
         print(_c("  Requires an index: run `recall init .` in the project once.", C.DIM))
         return 0
     from recall import mcp  # lazy, like dashboard — the CLI core stays import-light
@@ -318,22 +330,78 @@ def cmd_dashboard(args) -> int:
     """Start the local dashboard — the small app that makes the wiki visible."""
     from recall import dashboard
 
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx_path = _index_path(repo)
     if not idx_path.exists():
         print(_c(f"no index — run `recall init` in {repo} first", C.RED))
         return 1
+    # if a dashboard is ACTUALLY serving for this repo, open it instead of
+    # binding a second server on the same port (on Windows the bind would
+    # otherwise succeed and clobber the run-lock). Same probe `recall tray` uses.
+    info = dashboard.is_dashboard_live(repo)
+    if info:
+        import webbrowser
+
+        url = f"http://{info['host']}:{info['port']}"
+        print(_c(f"dashboard already running — opening {url}", C.DIM))
+        if not args.no_open:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        return 0
     return dashboard.serve(
         repo, idx_path, host=args.host, port=args.port, open_browser=not args.no_open,
         watch=not args.no_watch,
     )
 
 
+def cmd_tray(args) -> int:
+    """Run the dashboard as a background app (tray icon if available, else a loud
+    DO-NOT-CLOSE console). This is what the Desktop launcher calls so closing a window
+    can never silently kill the server."""
+    from recall import dashboard, tray
+
+    repo = _repo_from_args(args)
+    idx_path = _index_path(repo)
+    if not idx_path.exists():
+        print(_c(f"no index — run `recall init` in {repo} first", C.RED))
+        return 1
+    # if a dashboard is ACTUALLY serving for this repo, just open it — don't double-bind.
+    # Probe liveness (not just the lock file): a stale lock from a crash must NOT make us
+    # open a dead URL and skip starting — that's the very footgun tray exists to kill.
+    info = dashboard.is_dashboard_live(repo)
+    if info:
+        import webbrowser
+
+        url = f"http://{info['host']}:{info['port']}"
+        print(_c(f"dashboard already running — opening {url}", C.DIM))
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return 0
+    return tray.run(
+        repo, idx_path, host=args.host, port=args.port,
+        open_browser=not args.no_open, watch=not args.no_watch,
+    )
+
+
+def cmd_stop(args) -> int:
+    """Stop a dashboard running in the background for this project."""
+    from recall import dashboard
+
+    repo = _repo_from_args(args)
+    ok, msg = dashboard.stop(repo)
+    print(_c(("✓ " if ok else "") + msg, C.GREEN if ok else C.DIM))
+    return 0
+
+
 def cmd_shortcut(args) -> int:
     """Put a double-click dashboard launcher on the Desktop — no AI, no terminal."""
     from recall import shortcut
 
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     if args.remove:
         if shortcut.remove_shortcut(repo):
             print(_c("✓ desktop launcher removed", C.GREEN))
@@ -354,7 +422,7 @@ def cmd_stamp_commit(args) -> int:
     re-checks drift. Silent-by-default so a commit hook stays quiet."""
     from adapters.hook import stamp_latest_commit
 
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     out = stamp_latest_commit(repo)
     if out.get("stamped"):
         verb = "merged into" if out.get("action") == "MERGE" else "stamped"
@@ -374,7 +442,7 @@ def cmd_hook(args) -> int:
         uninstall_pre_commit,
     )
 
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     pre = getattr(args, "pre_commit", False)
     label = "pre-commit warning" if pre else "post-commit auto-stamp"
     if args.uninstall:
@@ -413,7 +481,7 @@ def cmd_hook(args) -> int:
 
 
 def cmd_stats(args) -> int:
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index in {repo}", C.RED))
@@ -491,7 +559,7 @@ def cmd_refine(args) -> int:
     from recall.llm import get_provider
     from recall.refine import refine_edges
 
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index — run `recall init` in {repo} first", C.RED))
@@ -515,11 +583,41 @@ def cmd_refine(args) -> int:
             print(_c(f"  [{done}/{total}] files", C.DIM))
 
     res = refine_edges(idx, provider, progress=progress)
+    # A fully-down provider must NOT read as a healthy "refined 0 edges — no change".
+    # But "0 refined" is also the LEGITIMATE result when the model classified everything as
+    # plain depends_on — so only call it a failure when EVERY call errored; a partial set of
+    # failures is a warning, never a hard fail (the rest of the run is valid).
+    if res.call_failures and res.call_failures >= res.files_seen and res.files_seen > 0:
+        print(_c(f"✗ refine failed — all {res.files_seen} model calls errored (provider down?)", C.RED)
+              + _c("  nothing changed; check the connection and retry", C.DIM))
+        return 1
+    if res.call_failures:
+        print(_c(f"⚠ partial refine — {res.call_failures}/{res.files_seen} model calls errored "
+                 f"(the rest succeeded)", C.MUSTARD))
     kinds = ", ".join(f"{k}={v}" for k, v in sorted(res.by_kind.items()))
     print(_c(f"✓ refined {res.edges_refined} edges", C.GREEN)
           + f"  ({res.files_seen} files · {kinds or 'no change'})")
     if res.dropped_labels:
         print(_c(f"  {res.dropped_labels} invalid labels dropped (kept as depends_on)", C.DIM))
+    return 0
+
+
+def cmd_unrefine(args) -> int:
+    """Reset every refined edge back to its original kind — the reverse of `recall refine`.
+    Model-free, loss-free, idempotent. The reversibility refine promises."""
+    from recall.refine import unrefine
+
+    repo = _repo_from_args(args)
+    idx = _open_existing(repo)
+    if idx is None:
+        print(_c(f"no index — run `recall init` in {repo} first", C.RED))
+        return 1
+    n = unrefine(idx)
+    if n == 0:
+        print(_c("nothing to unrefine", C.MUSTARD)
+              + _c(" — no edges have been refined", C.DIM))
+        return 0
+    print(_c(f"✓ unrefined {n} edges", C.GREEN) + _c("  reset to their original kind", C.DIM))
     return 0
 
 
@@ -603,7 +701,7 @@ def _warn_power_yield(res) -> None:
 
 
 def cmd_undo(args) -> int:
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index in {repo}", C.RED))
@@ -623,7 +721,7 @@ def cmd_undo(args) -> int:
 
 
 def cmd_forget(args) -> int:
-    repo = _find_repo(args.repo or ".")
+    repo = _repo_from_args(args)
     idx = _open_existing(repo)
     if idx is None:
         print(_c(f"no index in {repo}", C.RED))
@@ -981,12 +1079,14 @@ def build_parser() -> argparse.ArgumentParser:
     pb.set_defaults(func=cmd_brief)
 
     pco = sub.add_parser("contested", help="uncertainty hotspots — code the team kept changing")
+    pco.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
     pco.add_argument("--limit", type=int, default=20)
     pco.add_argument("--min-churn", type=int, default=2, help="ignore files touched by fewer commits")
     pco.add_argument("--repo", default=None)
     pco.set_defaults(func=cmd_contested)
 
     pex = sub.add_parser("explain", help="explain the repo to a new dev/AI: top files, decisions, what's in progress")
+    pex.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
     pex.add_argument("--for-prompt", action="store_true", help="copy-paste orientation block for web AI")
     pex.add_argument("--repo", default=None)
     pex.set_defaults(func=cmd_explain)
@@ -1011,14 +1111,17 @@ def build_parser() -> argparse.ArgumentParser:
     ps.set_defaults(func=cmd_stamp)
 
     pf = sub.add_parser("freshen", help="re-check pinned nodes for drift against git")
+    pf.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
     pf.add_argument("--repo", default=None)
     pf.set_defaults(func=cmd_freshen)
 
     pt = sub.add_parser("stats", help="show index stats")
+    pt.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
     pt.add_argument("--repo", default=None)
     pt.set_defaults(func=cmd_stats)
 
     pd = sub.add_parser("dashboard", help="open the local dashboard (the wiki, visible)")
+    pd.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
     pd.add_argument("--repo", default=None)
     pd.add_argument("--port", type=int, default=7099)
     pd.add_argument("--host", default="127.0.0.1")
@@ -1027,7 +1130,23 @@ def build_parser() -> argparse.ArgumentParser:
                     help="don't auto-index when a new commit lands (live mode is on by default)")
     pd.set_defaults(func=cmd_dashboard)
 
+    ptr = sub.add_parser("tray", help="run the dashboard in the background (tray icon if installed, else a no-close console)")
+    ptr.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
+    ptr.add_argument("--repo", default=None)
+    ptr.add_argument("--port", type=int, default=7099)
+    ptr.add_argument("--host", default="127.0.0.1")
+    ptr.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
+    ptr.add_argument("--no-watch", action="store_true",
+                     help="don't auto-index when a new commit lands (live mode is on by default)")
+    ptr.set_defaults(func=cmd_tray)
+
+    pst = sub.add_parser("stop", help="stop a dashboard running in the background for this project")
+    pst.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
+    pst.add_argument("--repo", default=None)
+    pst.set_defaults(func=cmd_stop)
+
     psh = sub.add_parser("shortcut", help="put a double-click dashboard launcher on your Desktop (no AI needed)")
+    psh.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
     psh.add_argument("--repo", default=None)
     psh.add_argument("--port", type=int, default=7099)
     psh.add_argument("--remove", action="store_true", help="remove the launcher again")
@@ -1080,6 +1199,11 @@ def build_parser() -> argparse.ArgumentParser:
     prf.add_argument("--repo", default=None)
     prf.set_defaults(func=cmd_refine)
 
+    pur = sub.add_parser("unrefine", help="reset refined edges back to their original kind (reverse of refine)")
+    pur.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
+    pur.add_argument("--repo", default=None)
+    pur.set_defaults(func=cmd_unrefine)
+
     pu = sub.add_parser("undo", help="reverse a power run (surgically or all)")
     pu.add_argument("--power-run", type=int, default=None)
     pu.add_argument("--all", action="store_true", help="undo every power run")
@@ -1095,15 +1219,27 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _subcommand_names(parser) -> set[str]:
+    """Every registered subcommand name, read off the parser's subparsers action — so the
+    bare-query router can never drift out of sync with the actual commands."""
+    import argparse as _ap
+
+    names: set[str] = set()
+    for action in parser._actions:
+        if isinstance(action, _ap._SubParsersAction):
+            names.update(action.choices.keys())
+    return names
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
 
     # Bare `recall "<query>"` (no subcommand) is the most common call — route it
-    # to recall without forcing the user to type a subcommand.
-    known = {"init", "brief", "contested", "explain", "review", "precommit-check", "stamp", "stamp-commit",
-             "stats", "freshen", "dashboard", "shortcut", "hook", "mcp",
-             "connect", "power", "refine", "undo", "forget", "-h", "--help"}
+    # to recall without forcing the user to type a subcommand. The set of real
+    # subcommands is read from the parser itself (not a hand-kept list that drifts —
+    # that's how `tray`/`stop` once fell through to being parsed as queries).
+    known = _subcommand_names(parser) | {"-h", "--help"}
     if argv and argv[0] not in known:
         return _run_recall(argv)
 
@@ -1111,7 +1247,28 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "func", None):
         parser.print_help()
         return 0
-    return args.func(args)
+    return _dispatch(args.func, args)
+
+
+def _dispatch(func, args) -> int:
+    """Run a command with a top-level error boundary, so a provider/network/subprocess
+    failure (a down Ollama, an expired API key, a PowerShell .lnk error) prints a clean
+    line and exits non-zero instead of dumping a raw traceback on a paying user. The
+    dashboard worker already guards its own calls; this is the CLI's equivalent.
+    KeyboardInterrupt and SystemExit pass through untouched (clean Ctrl-C, argparse exits)."""
+    try:
+        return func(args)
+    except KeyboardInterrupt:
+        print(_c("\ninterrupted", C.DIM))
+        return 130
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001 — the boundary's whole job is to catch broadly
+        # one friendly line; the class name helps support without a scary traceback.
+        print(_c(f"error: {e}", C.RED))
+        if os.environ.get("RECALL_DEBUG"):
+            raise  # opt-in full traceback for debugging
+        return 1
 
 
 def _run_recall(argv: list[str]) -> int:
@@ -1122,7 +1279,7 @@ def _run_recall(argv: list[str]) -> int:
     p.add_argument("--topk", type=int, default=3)
     p.add_argument("--repo", default=None)
     args = p.parse_args(argv)
-    return cmd_recall(args)
+    return _dispatch(cmd_recall, args)
 
 
 if __name__ == "__main__":

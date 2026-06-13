@@ -157,6 +157,18 @@ html,body{height:100%}
 body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:var(--fs-lead);
   line-height:1.5;-webkit-font-smoothing:antialiased;height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .mark{background:var(--mustard);color:var(--marker-ink);padding:0 .12em;border-radius:2px}
+.idx-note{margin-top:12px;padding:12px 14px;background:var(--mustard-soft);border-left:3px solid var(--mustard);border-radius:6px;font-size:12.5px;line-height:1.55;color:var(--muted-foreground)}
+.idx-note b{color:var(--foreground)}
+/* the stepped "new since last pull" dot — oxblood, the tool's "attention / new"
+   colour, so it stands apart from the green "fresh" badge and the mustard accents
+   that are everywhere (Owner 2026-06-13). Strong (this pull) → medium → faint (2 ago).
+   g0 also carries a small "new" pill; g1/g2 are bare dots. Per-person, client-only. */
+.pdot{display:inline-flex;align-items:center;gap:5px;flex:none;margin-left:8px}
+.pdot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--oxblood)}
+.pdot--g0::before{background:var(--oxblood);box-shadow:0 0 0 3px var(--oxblood-soft)}
+.pdot--g1::before{background:var(--oxblood);opacity:.6;width:7px;height:7px}
+.pdot--g2::before{background:var(--oxblood);opacity:.32;width:6px;height:6px}
+.pdot__txt{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:var(--oxblood);padding:1px 5px;border-radius:4px}
 .serif{font-family:var(--serif);font-style:italic;font-weight:400}
 .mono{font-family:var(--mono)}
 /* subtle, rounded scrollbars (shadcn-quiet) — thin track, pill thumb, theme-aware. Keeps
@@ -170,7 +182,13 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:var
 
 /* ---- header ---- */
 header{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
-.bar{display:flex;align-items:center;gap:12px;padding:10px 18px}
+/* the bar packs ~10 controls in one row; it fits comfortably at ≥1600px. Below
+   that it WRAPS (row-gap) instead of overflowing off-screen — the break the
+   Owner hit on laptops (2026-06-13: "das tool wird unter 1920 komplett
+   zerschossen"). The responsive ladder lives in the @media block near the tabs:
+   ~1560px → search drops to its own full-width row; ~1280px → the right-side
+   control cluster is allowed to wrap too. */
+.bar{display:flex;align-items:center;flex-wrap:wrap;gap:10px 12px;padding:10px 18px}
 /* ONE global search (Owner 2026-06-09): sits in the fixed header, never scrolls, and
    searches whatever tab is active — the per-tab search boxes are gone. Styled like the
    shadcn input: rounded 8px, 1px border, subtle bg, gold focus ring. */
@@ -207,6 +225,13 @@ header{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card
 .live__cnt{text-transform:none;letter-spacing:0;color:var(--success);font-weight:700;
   background:var(--success-soft);padding:1px 6px;border-radius:var(--r);margin-left:5px}
 .live.live--off .dot{background:var(--mute-2);animation:none}
+/* reconnecting: the server is briefly down (almost always a restart). Amber dot +
+   a spinning ring so it reads as "working on it", never a frozen/broken spinner. */
+.live.live--recon{color:var(--muted)}
+.live.live--recon .dot{background:var(--mustard);animation:pulse 1.1s ease infinite}
+.live__ring--spin{animation:ringspin .9s linear infinite}
+@keyframes ringspin{to{transform:rotate(360deg)}}
+.live__ring--spin .fg{stroke:var(--mustard)}
 /* the header help "?" next to the live pill (slightly smaller, same family as .help-ic) */
 .help-ic--hdr{width:18px;height:18px;font-size:var(--fs-micro)}
 /* header "new" badge — a quiet accumulator + quick-link to Overview. NEVER auto-reloads
@@ -256,7 +281,7 @@ header{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card
 .live__ring .bg{stroke:var(--bone-3)}
 .live__ring .fg{stroke:var(--success);transition:stroke-dashoffset .9s linear}
 .live--idx .live__ring .fg{stroke:var(--oxblood)}
-@media (prefers-reduced-motion:reduce){.newbadge__dot{animation:none}.live .dot{animation:none}.live__ring .fg{transition:none}}
+@media (prefers-reduced-motion:reduce){.newbadge__dot{animation:none}.live .dot{animation:none}.live__ring .fg{transition:none}.live__ring--spin{animation:none}}
 /* live & auto-stamp settings block (Power tab) */
 .live-block{margin-top:22px;border-radius:var(--ui-radius);box-shadow:var(--ui-ring);background:var(--card);overflow:hidden}
 /* 2-column row: the mode (icon + name + status) on the left, its description + action on
@@ -405,6 +430,27 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .ui-btn--destructive{background:var(--destructive);color:var(--solid-ink)}
 .ui-btn--destructive:hover{opacity:.9}
 .ui-btn .ic-svg{flex:none}
+
+/* ABOUT — GitHub/Discord icon links (owner 2026-06-13) */
+.about-links{display:flex;gap:10px;flex-wrap:wrap}
+.about-link{display:inline-flex;align-items:center;gap:8px;
+  height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--input);
+  background:transparent;color:var(--foreground);text-decoration:none;
+  font-family:var(--sans);font-size:13px;font-weight:500;line-height:1;
+  transition:background-color .14s,border-color .14s,color .14s}
+.about-link:hover{background:var(--accent);border-color:var(--ring-color)}
+.about-link svg{flex:none;display:block}
+
+/* header GitHub/Discord icon links — sit after the About tab (owner 2026-06-13).
+   Stretch to the full 44px tab row (align-items:stretch on .tabs) and center the SVG,
+   so they share the exact vertical midline of the tab text — no fixed height that
+   would float them low. Quiet utility links (no chrome), not tabs. */
+.nav-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;
+  color:var(--muted-foreground);text-decoration:none;flex:none;cursor:pointer;
+  transition:color .14s}
+.nav-icon:hover{color:var(--foreground)}
+.nav-icon svg{display:block}
+.nav-icon[hidden]{display:none}
 
 /* FIELD — a label above an input (the form pattern from the preview). */
 .ui-field{display:grid;gap:6px}
@@ -642,6 +688,14 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
   border:1px solid var(--hair-2);border-radius:var(--r);padding:5px 11px;cursor:pointer}
 .fdate input[type=date]:hover{border-color:var(--ink)}
 .fdate input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer;opacity:.6}
+/* shared time filter — quick buttons (1h/24h/7d) sit before the from/to dates */
+.ftime{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ftime__qs{display:inline-flex;border:1px solid var(--hair-2);border-radius:var(--r);overflow:hidden}
+.ftq{appearance:none;height:28px;font-family:var(--mono);font-size:var(--fs-meta);color:var(--muted);
+  background:var(--paper);border:none;border-right:1px solid var(--hair-2);padding:0 11px;cursor:pointer;transition:background-color .14s,color .14s}
+.ftq:last-child{border-right:none}
+.ftq:hover{background:var(--field-bg);color:var(--ink)}
+.ftq.on{background:var(--mustard);color:var(--gold-ink);font-weight:600}
 
 /* (9) type chip + (12/16) author chip on each feed item — rounded pill, like the rest */
 .ty{font-family:var(--mono);font-size:var(--fs-micro);font-weight:700;letter-spacing:.04em;text-transform:uppercase;
@@ -1404,18 +1458,30 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .nav-sep{color:var(--mute-2)}
 .nav-x{flex:none;border:none;background:none;color:var(--mute-2);font-family:var(--mono);font-size:var(--fs-body);cursor:pointer;padding:2px 4px}
 .nav-x:hover{color:var(--ink)}
+/* ===== LAPTOP layer (Owner 2026-06-13: "das tool wird unter 1920 zerschossen,
+   muss bis ~1200 laufen"). The header bar wraps natively now; this ladder makes
+   each wrap CLEAN instead of letting the control cluster split awkwardly. =====
+   ~1600px: the global search drops to its own full-width second row (it is the
+   single biggest fixed consumer at 360px), which frees the top row for brand +
+   all the right-side controls on every common laptop (1536 / 1440 / 1366). */
+@media(max-width:1600px){
+  .gsearch{order:10;flex:1 1 100%;margin-left:0}
+}
+/* ~1300px: the right-side cluster itself no longer fits next to brand+project,
+   so push the controls to the right and shrink the project name + tighten gaps. */
+@media(max-width:1300px){
+  .bar{gap:8px 10px;padding:10px 14px}
+  .proj__v{max-width:140px}
+  .live__upd,.live__sep{display:none}   /* keep the dot + "live"; drop the timestamp tail */
+}
 /* ===== tablet layer (Owner 2026-06-10: everything down to tablet must hold) =====
-   Wide-screen rules above stay untouched; this only relaxes what genuinely breaks:
-   the tab strip overflows (→ swipeable), the header bar crowds (→ search wraps to its
-   own row), two-pane masters (wiki/product) stack, and 3-up tracks/cards go single. */
+   the tab strip overflows (→ swipeable), two-pane masters stack, 3-up grids go single. */
 @media(max-width:1100px){
   .tabs{overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
   .tabs::-webkit-scrollbar{display:none}
   .tab{flex:0 0 auto;white-space:nowrap}
 }
 @media(max-width:900px){
-  .bar{flex-wrap:wrap;row-gap:8px}
-  .gsearch{order:10;flex:1 1 100%;margin-left:0}
   .phead{flex-direction:column;align-items:flex-start;gap:6px}
   .phead .lead{text-align:left}
   .lead-wrap{justify-content:flex-start}
@@ -1513,6 +1579,8 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
     <button class="tab tab--right" data-p="howitworks">How it works</button>
     <button class="tab tab--right" data-p="changelog">Changelog</button>
     <button class="tab tab--right" data-p="about">About</button>
+    <a class="nav-icon" id="nav-github" target="_blank" rel="noopener" hidden title="GitHub repository" aria-label="GitHub repository"></a>
+    <a class="nav-icon" id="nav-discord" target="_blank" rel="noopener" hidden title="Discord community" aria-label="Discord community"></a>
   </div>
 </nav>
 
@@ -1602,16 +1670,36 @@ function whoWhen(label, ts, by){
 
 async function load(){
   const r = await fetch('/api/data'); DATA = await r.json();
+  _loadPullGens(); recordPullAll();   // seed/advance the "what's new since last pull" tiers
   await loadConnection();  // know the AI connection before any tab paints
   await loadProjects();    // know the project + recent list for the header switcher
   loadLicense();           // the stored account license, async (ADR-030)
   await loadHook();        // git hook status for the Power-tab live block + header pills
   loadRulesStatus();       // rules.md health pill (no await — paints when it resolves)
   loadMcp();               // MCP registration pill (no await — paints when it resolves)
+  loadHeaderLinks();       // GitHub/Discord icons after the About tab (no await)
   renderHeaderConnect();
   maybeTour();             // FIRST open: the welcome tour (before the first tab paints its hint)
   renderAll(); switchTab('overview');
   startPulse();            // LIVE mode: watch git + index, auto-refresh + toast
+}
+
+/* The two header icon links after the About tab: GitHub (always, the repo) and Discord
+   (only when /api/about carries a real invite — never a dead link, same rule as the
+   About tab). Inline SVG marks, no external request (the dashboard's offline rule). */
+function loadHeaderLinks(){
+  const apply = (d) => {
+    const GH = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>`;
+    const DC = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189z"/></svg>`;
+    const gh=document.getElementById('nav-github');
+    if(gh && d && d.github_url){ gh.href=d.github_url; gh.innerHTML=GH; gh.hidden=false; }
+    const dc=document.getElementById('nav-discord');
+    if(dc && d && d.discord_url){ dc.href=d.discord_url; dc.innerHTML=DC; dc.hidden=false; }
+  };
+  if(typeof ABOUT!=='undefined' && ABOUT){ apply(ABOUT); return; }
+  fetch('/api/about').then(r=>r.ok?r.json():Promise.reject(r.status))
+    .then(d=>{ if(typeof ABOUT!=='undefined') ABOUT=d; apply(d); })
+    .catch(()=>{});
 }
 
 /* ===== header: project switcher ===== */
@@ -1724,9 +1812,10 @@ function renderLivePill(p){
   const txt=document.getElementById('live-txt'), upd=document.getElementById('live-upd');
   const sep=document.getElementById('live-sep'), cnt=document.getElementById('live-cnt');
   if(!pill) return;
-  pill.classList.remove('live--on','live--idx','live--off','live--stale');
+  pill.classList.remove('live--on','live--idx','live--off','live--stale','live--recon');
   const pending = (NEW.commits+NEW.lessons)>0;
-  if(!LIVE_ON){ pill.classList.add('live--off'); if(txt) txt.textContent='read-only'; }
+  if(_pulseFail>0){ pill.classList.add('live--recon'); if(txt) txt.textContent='reconnecting…'; }  // server restarting
+  else if(!LIVE_ON){ pill.classList.add('live--off'); if(txt) txt.textContent='read-only'; }
   else if(p && p.auto && p.auto.indexing){ pill.classList.add('live--idx'); if(txt) txt.textContent='indexing…'; }
   else if(pending){ pill.classList.add('live--stale'); if(txt) txt.textContent='behind'; }  // red: unloaded changes
   else { pill.classList.add('live--on'); if(txt) txt.textContent='live'; }
@@ -1743,22 +1832,49 @@ function renderLivePill(p){
 
 // (3) the countdown ring: fill from empty→full as the next poll approaches.
 function renderRing(){
+  const ring=document.getElementById('live-ring');
   const fg=document.querySelector('#live-ring .fg'); if(!fg) return;
   const C=2*Math.PI*5;  // r=5
+  // While reconnecting, the CSS spin animation owns the ring — leave the dash full so
+  // it reads as an honest "working on it", not a frozen half-countdown.
+  if(ring) ring.classList.toggle('live__ring--spin', _pulseFail>0);
+  if(_pulseFail>0){ fg.style.strokeDasharray=C.toFixed(1); fg.style.strokeDashoffset='0'; return; }
   const left=Math.max(0, _nextPoll-Date.now());
   const frac=LIVE_ON ? Math.min(1, 1-(left/PULSE_MS)) : 0;  // 0→1 over the interval
   fg.style.strokeDasharray=C.toFixed(1);
   fg.style.strokeDashoffset=(C*(1-frac)).toFixed(1);
 }
 
+let _pulseFail=0;   // consecutive failed pulses — drives the "reconnecting" pill + fast retry
+const RECON_MS=1500;   // fast retry while the server is unreachable (a restart, usually)
 async function pulseTick(){
+  // self-rescheduling poll: a fixed setInterval ignores _nextPoll, so a failed pulse
+  // would still wait the full PULSE_MS before retrying — leaving "reconnecting…" stuck
+  // for up to 30s on a restart. We reschedule the NEXT tick from inside, honouring the
+  // interval the outcome chose (RECON_MS on failure, PULSE_MS on success).
   let p;
-  try{ const r=await fetch('/api/pulse'); p=await r.json(); }
-  catch(e){ _nextPoll=Date.now()+PULSE_MS; return; }   // a transient miss just skips this tick
+  try{
+    const r=await fetch('/api/pulse',{cache:'no-store'});
+    if(!r.ok) throw new Error('pulse '+r.status);
+    p=await r.json();
+  }catch(e){
+    // The server is briefly unreachable — almost always a RESTART (the most common
+    // reason this page has been open across a code change). Don't sit on a stuck ring
+    // for 30s: show "reconnecting", retry quickly, and recover the moment it's back.
+    _pulseFail++;
+    LIVE_ON=true;                     // a restart re-enables live — never strand at read-only
+    _nextPoll=Date.now()+RECON_MS;    // fast retry, not the calm 30s
+    renderLivePill(PULSE);
+    _schedulePulse(RECON_MS);         // actually retry soon — the whole point of the fast path
+    return;
+  }
+  const wasDown=_pulseFail>0; _pulseFail=0;
   if(p.auto && typeof p.auto.on==='boolean') LIVE_ON=p.auto.on;  // server tells us if the watcher runs
   const prev=PULSE;
   // tally real arrivals into the header badge — NEVER reload the page content here.
-  if(prev){
+  // On recovery from a restart (wasDown) skip the delta: counts may have shifted while
+  // we couldn't see them, and a spurious "+N" after a reconnect is noise, not news.
+  if(prev && !wasDown){
     const dCommits=Math.max(0,(p.commits||0)-(prev.commits||0));
     const dLessons=Math.max(0,(p.lessons||0)-(prev.lessons||0));
     if(p.head!==prev.head){ NEW.commits+=(dCommits||1); }
@@ -1768,15 +1884,19 @@ async function pulseTick(){
   PULSE=p;
   _nextPoll=Date.now()+PULSE_MS;
   renderLivePill(p);
+  _schedulePulse(PULSE_MS);           // back to the calm cadence
 }
 
 let _pulseTimer=null, _ringTimer=null;
+function _schedulePulse(ms){
+  if(_pulseTimer) clearTimeout(_pulseTimer);   // never let two chains run in parallel
+  _pulseTimer=setTimeout(pulseTick, ms);
+}
 function startPulse(){
   if(_pulseTimer) return;
   _nextPoll=Date.now()+PULSE_MS;
   renderNewBadge();   // show the calm green "up to date" state from the start
-  pulseTick();        // first read establishes the baseline (no badge bump on first read)
-  _pulseTimer=setInterval(pulseTick, PULSE_MS);
+  pulseTick();        // first read establishes the baseline (and chains the next tick)
   _ringTimer=setInterval(renderRing, 900);  // animate the countdown ring smoothly
 }
 
@@ -1809,7 +1929,7 @@ function clearNewBadge(){ NEW.commits=0; NEW.lessons=0; renderNewBadge(); }
 async function goToNew(){
   // the user chose to refresh — NOW we pull fresh data + rebuild (safe: it's deliberate).
   clearNewBadge();
-  try{ const dr=await fetch('/api/data'); DATA=await dr.json(); }catch(e){}
+  try{ const dr=await fetch('/api/data'); DATA=await dr.json(); recordPullAll(); }catch(e){}
   CONTESTED_CACHE=STALE_CACHE=null;  // new commits → the lazy git scans must re-run
   document.querySelectorAll('.panel').forEach(p=>p.remove());
   renderAll(); switchTab('overview');
@@ -2035,8 +2155,23 @@ function authorChip(L){ return L.author?`<span class="author" title="author"><sp
 /* ===== (10/11/13/14) filter bar: by TYPE · ANCHOR · PERSON =====
    One shared filter state + applyFilters(), reused on Overview / Wiki / Code so the
    same mental model works everywhere. Filtering is pure client-side over DATA.lessons. */
-const FILTER = {type:'', anchor:'', author:'', tag:'', touches:''};
-function hasActiveFilter(){ return !!(FILTER.type||FILTER.anchor||FILTER.author||FILTER.tag||FILTER.touches); }
+const FILTER = {type:'', anchor:'', author:'', tag:'', touches:'', from:'', to:'', quick:''};
+function hasActiveFilter(){ return !!(FILTER.type||FILTER.anchor||FILTER.author||FILTER.tag||FILTER.touches||FILTER.from||FILTER.to||FILTER.quick); }
+// a YYYY-MM-DD date-input value -> unix-second bound. end=true snaps to 23:59:59 so a
+// "to" date is inclusive. Empty -> null (no bound). Local time. (Shared by Wiki + Git.)
+function dateBound(v, end){
+  if(!v) return null;
+  const p=v.split('-').map(Number); if(p.length!==3||p.some(isNaN)) return null;
+  const d=end ? new Date(p[0],p[1]-1,p[2],23,59,59) : new Date(p[0],p[1]-1,p[2],0,0,0);
+  return Math.floor(d.getTime()/1000);
+}
+// the active [fromTs, toTs] window in unix seconds, or [null,null]. A quick button
+// (1h/24h/7d) takes precedence over the date inputs; null bound = open-ended.
+function timeWindow(){
+  if(FILTER.quick){ const n=Date.now()/1000; const span={'1h':3600,'24h':86400,'7d':604800}[FILTER.quick]; return span?[n-span,null]:[null,null]; }
+  return [dateBound(FILTER.from,false), dateBound(FILTER.to,true)];
+}
+function inTimeWindow(ts){ const [a,b]=timeWindow(); if(a!==null&&!(ts&&ts>=a)) return false; if(b!==null&&!(ts&&ts<=b)) return false; return true; }
 // does this lesson's file carry the given kind of "file touches" (briefing payload)?
 function lessonTouches(L, kind){
   const t=L.touches||{};
@@ -2053,6 +2188,7 @@ function applyFilters(list){
     if(FILTER.anchor && !(L.anchors||[]).some(a=>a.toLowerCase()===FILTER.anchor.toLowerCase())) return false;
     if(FILTER.tag && !(L.tags||[]).some(t=>t.toLowerCase()===FILTER.tag.toLowerCase())) return false;
     if(FILTER.touches && !lessonTouches(L, FILTER.touches)) return false;
+    if((FILTER.quick||FILTER.from||FILTER.to) && !inTimeWindow(L.ts)) return false;
     return true;
   });
 }
@@ -2096,12 +2232,28 @@ function filterBar(){
       ${opt('tasks',FILTER.touches,'has open tasks')}
       ${opt('deps',FILTER.touches,'leans on others')}
     </select>
+    ${timeFilterUI()}
     ${hasActiveFilter()?`<button class="fclear" onclick="clearFilters()">✕ clear</button>`:''}
   </div>`;
 }
+/* the SHARED time filter — quick buttons (1h/24h/7d) + from/to dates. One state
+   (FILTER.quick/from/to) drives Wiki AND Git, so the window stays in sync across
+   tabs (Owner 2026-06-13). A quick button clears the date inputs and vice-versa. */
+function timeFilterUI(){
+  const qb=(k,lbl)=>`<button class="ftq ${FILTER.quick===k?'on':''}" onclick="setTimeQuick('${k}')" title="last ${lbl}">${lbl}</button>`;
+  return `<span class="ftime">
+    <span class="ftime__qs">${qb('1h','1h')}${qb('24h','24h')}${qb('7d','7d')}</span>
+    <label class="fdate" title="from this date">from
+      <input type="date" value="${esc(FILTER.from)}" onchange="setTimeDate('from',this.value)"></label>
+    <label class="fdate" title="to this date">to
+      <input type="date" value="${esc(FILTER.to)}" onchange="setTimeDate('to',this.value)"></label>
+  </span>`;
+}
+function setTimeQuick(k){ FILTER.quick=(FILTER.quick===k?'':k); if(FILTER.quick){ FILTER.from=''; FILTER.to=''; } rerenderCurrentTab(); }
+function setTimeDate(which,v){ FILTER[which]=v; if(v) FILTER.quick=''; rerenderCurrentTab(); }
 function setFilter(key,val){ FILTER[key]=val; rerenderCurrentTab(); }
 function setTagFilterFromChip(t){ FILTER.tag=(FILTER.tag===t?'':t); rerenderCurrentTab(); }
-function clearFilters(){ FILTER.type=FILTER.anchor=FILTER.author=FILTER.tag=FILTER.touches=''; rerenderCurrentTab(); }
+function clearFilters(){ FILTER.type=FILTER.anchor=FILTER.author=FILTER.tag=FILTER.touches=FILTER.from=FILTER.to=FILTER.quick=''; rerenderCurrentTab(); }
 function rerenderCurrentTab(){
   const cur=document.querySelector('.tab.on'); const page=cur&&cur.getAttribute('data-p');
   document.querySelectorAll('.panel').forEach(p=>p.remove());
@@ -2109,6 +2261,64 @@ function rerenderCurrentTab(){
 }
 
 const T = {}; // tab renderers, lazy
+/* ===== pull generations — "what's new since the last refresh" =====
+   With many devs pushing many commits per hour, the list scrolls and you lose
+   track of what arrived since you last pulled (Owner 2026-06-13). We remember the
+   id-set from the last 3 pulls, per project, in localStorage. recordPull() runs on
+   every deliberate data load: anything not seen before is generation 0 ("new this
+   pull"); the previous gen-0 becomes gen-1, that becomes gen-2, gen-3+ falls off
+   the radar. pullGen(id) -> 0|1|2|null drives the stepped dot on each row, and it
+   re-tiers automatically on every pull. The FIRST ever pull seeds the baseline
+   silently (everything is "seen", nothing flashes as new). */
+let PULL_GENS = { commit: [], lesson: [] };   // each: array of Set-like id arrays, newest first
+let _pullSeeded = { commit:false, lesson:false };
+function _pullKey(kind){ return 'recall_pullgens_'+kind+'_'+((DATA&&DATA.repo)||'_')+'_'+((DATA&&DATA.path)||''); }
+function _loadPullGens(){
+  for(const kind of ['commit','lesson']){
+    try{ const raw=localStorage.getItem(_pullKey(kind)); const v=raw?JSON.parse(raw):null;
+      if(v&&Array.isArray(v.gens)){ PULL_GENS[kind]=v.gens.map(a=>Array.isArray(a)?a:[]); _pullSeeded[kind]=true; } }
+    catch(e){ PULL_GENS[kind]=[]; }
+  }
+}
+function _savePullGens(kind){
+  try{ localStorage.setItem(_pullKey(kind), JSON.stringify({gens:PULL_GENS[kind]})); }catch(e){}
+}
+// ids currently present in DATA for each kind
+function _idsNow(kind){
+  if(kind==='commit') return ((DATA.git&&DATA.git.commits)||[]).map(c=>c.sha).filter(Boolean);
+  return (DATA.lessons||[]).map(L=>L.sha||('id:'+L.id)).filter(Boolean);
+}
+// the union of every id we have ever recorded across all generations
+function _seenSet(kind){ const s=new Set(); for(const g of PULL_GENS[kind]) for(const id of g) s.add(id); return s; }
+/* record one pull. On first ever call for a kind: seed silently (current ids become
+   "already seen", no new flash). Afterwards: ids not in the seen-set are this pull's
+   generation 0; shift older gens down; keep at most 3. */
+function recordPull(kind){
+  const now=_idsNow(kind);
+  if(!_pullSeeded[kind]){
+    PULL_GENS[kind]=[ now.slice() ];   // baseline: everything seen, nothing new
+    _pullSeeded[kind]=true; _savePullGens(kind); return;
+  }
+  const seen=_seenSet(kind);
+  const fresh=now.filter(id=>!seen.has(id));
+  if(fresh.length===0) return;          // nothing new → generations unchanged
+  PULL_GENS[kind]=[ fresh, ...PULL_GENS[kind] ].slice(0,3);   // newest first, keep 3
+  _savePullGens(kind);
+}
+function recordPullAll(){ recordPull('commit'); recordPull('lesson'); }
+// 0 = new this pull, 1 = last pull, 2 = 2 pulls ago, null = older / unseen-but-baseline
+function pullGen(kind, id){
+  for(let i=0;i<PULL_GENS[kind].length;i++){ if(PULL_GENS[kind][i].includes(id)) return i; }
+  return null;
+}
+// the stepped "new" dot for a row — strong → medium → faint over 3 pulls
+function pullDot(kind, id){
+  const g=pullGen(kind, id);
+  if(g===null||g>2) return '';
+  const lbl=['new','1 pull ago','2 pulls ago'][g];
+  return `<span class="pdot pdot--g${g}" title="arrived ${g===0?'since your last refresh':lbl}">${g===0?'<span class="pdot__txt">new</span>':''}</span>`;
+}
+
 function renderAll(){
   T.overview(); // eager so first paint is instant
 }
@@ -2154,13 +2364,14 @@ T.overview = () => {
     const drift = L.drift==='fresh'?'<span class="ui-badge ui-badge--success">fresh</span>'
       : L.drift==='committed'?'<span class="ui-badge ui-badge--warn">check</span>'
       : L.drift==='uncommitted'?'<span class="ui-badge ui-badge--warn">edited</span>':'';
+    const lid=L.sha||('id:'+L.id);
     return `<div class="ui-row ui-row--click" onclick="openWiki(${L.id})">
       <span class="ui-row__icon ui-row__icon--${ic}">${icon(ic,16)}</span>
       <span class="ui-row__main">
         <span class="ui-row__title">${esc(L.title)}</span>
         <span class="ui-row__sub">${L.why?esc(L.why):(L.ts?when(L.ts):'')}</span>
       </span>
-      ${drift}${impBadge(L.imp)}
+      ${drift}${impBadge(L.imp)}${pullDot('lesson',lid)}
       <span class="ui-row__arrow">${icon('arrow',14)}</span></div>`;
   };
   const commitRow = c => {
@@ -2172,7 +2383,7 @@ T.overview = () => {
         <span class="ui-row__sub">${c.author?esc(c.author)+' · ':''}${c.ts?when(c.ts):''}</span>
       </span>
       ${isLesson?'<span class="ui-badge ui-badge--success">stamped</span>':''}
-      ${c.sha?`<span class="ui-row__meta">${esc(c.sha)}</span>`:''}</div>`;
+      ${c.sha?`<span class="ui-row__meta">${esc(c.sha)}</span>`:''}${c.sha?pullDot('commit',c.sha):''}</div>`;
   };
   // the bare "0/4" counters were unreadable (owner 2026-06-11) — each row now says
   // what is open: a mini progress bar + "n/m done", or an "open" pill without a checklist
@@ -2195,9 +2406,11 @@ T.overview = () => {
   const learnedList=applyFilters(DATA.lessons).slice().sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,30);
   const learned = learnedList.length?learnedList.map(lessonRow).join('')
     : `<div class="ui-row"><span class="ui-row__sub" style="padding:6px 0">No lessons match the filter.</span></div>`;
-  const commits=((DATA.git&&DATA.git.commits)||[]).slice(0,30);
+  // the time filter applies to the commit list too (Owner 2026-06-13: "filter greift nur links")
+  const timeActive=!!(FILTER.quick||FILTER.from||FILTER.to);
+  const commits=((DATA.git&&DATA.git.commits)||[]).filter(c=>!timeActive||inTimeWindow(c.ts)).slice(0,30);
   const updated = commits.length?commits.map(commitRow).join('')
-    : `<div class="ui-row"><span class="ui-row__sub" style="padding:6px 0">No commits yet.</span></div>`;
+    : `<div class="ui-row"><span class="ui-row__sub" style="padding:6px 0">${timeActive?'No commits in this window.':'No commits yet.'}</span></div>`;
   const openTasks=(DATA.tasks||[]).filter(t=>t.status==='open').slice(0,30);
   const tasksHtml = openTasks.length?openTasks.map(taskRow).join('')
     : `<div class="ui-row" style="padding:14px 16px"><span class="ui-row__sub">no open tasks — <a onclick="switchTab('tasks')" style="color:var(--primary);cursor:pointer">manage tasks →</a></span></div>`;
@@ -3419,15 +3632,9 @@ function refreshConnectionViews(){
 }
 
 /* ===== GIT — branches, commits, file tree at HEAD ===== */
-let gitQuery='', gitAuthor='', gitType='', gitSort='new', gitFrom='', gitTo='';
-// a YYYY-MM-DD date-input value -> unix-second bound. `end=true` snaps to 23:59:59 of
-// that day so a "to" date is inclusive. Empty string -> null (no bound). Local time.
-function dateBound(v, end){
-  if(!v) return null;
-  const p=v.split('-').map(Number); if(p.length!==3||p.some(isNaN)) return null;
-  const d=end ? new Date(p[0],p[1]-1,p[2],23,59,59) : new Date(p[0],p[1]-1,p[2],0,0,0);
-  return Math.floor(d.getTime()/1000);
-}
+let gitQuery='', gitAuthor='', gitType='', gitSort='new';
+// the date window is the SHARED time filter (FILTER.from/to/quick) so Git and Wiki
+// stay in sync (Owner 2026-06-13 "sync the filters across tabs where it makes sense").
 T.git = () => {
   const g=DATA.git||{branches:[],commits:[],tree:[]};
   const cur=DATA.branch;
@@ -3436,7 +3643,6 @@ T.git = () => {
   const gAuthors=[...new Set(g.commits.map(c=>c.author).filter(Boolean))];
   const gType=s=>{ const m=(s||'').match(/^\s*(feat|fix|refactor|perf|chore|docs|test)\b/); return m?m[1]:''; };
   const gTypes=[...new Set(g.commits.map(c=>gType(c.subject)).filter(Boolean))].sort();
-  const fromTs=dateBound(gitFrom,false), toTs=dateBound(gitTo,true);
   const branches=g.branches.map(b=>`<div class="item ${b.name===cur?'gitcur':''}">
     <div class="top"><span class="title">${esc(b.name)}${b.name===cur?' <span class="deco">current</span>':''}</span>
       <span class="ago">${b.ts?when(b.ts):''}</span></div>
@@ -3446,8 +3652,7 @@ T.git = () => {
     (!q || (c.subject||'').toLowerCase().includes(q) || (c.author||'').toLowerCase().includes(q) || (c.sha||'').toLowerCase().includes(q))
     && (!gitAuthor || c.author===gitAuthor)
     && (!gitType || gType(c.subject)===gitType)
-    && (fromTs===null || (c.ts && c.ts>=fromTs))
-    && (toTs===null || (c.ts && c.ts<=toTs)));
+    && inTimeWindow(c.ts));
   // sort by commit time (the list arrives newest-first from git; honour the toggle)
   if(gitSort==='old') cfilt.sort((a,b)=>(a.ts||0)-(b.ts||0));
   else cfilt.sort((a,b)=>(b.ts||0)-(a.ts||0));
@@ -3478,11 +3683,8 @@ T.git = () => {
           <option value="new" ${gitSort==='new'?'selected':''}>newest first</option>
           <option value="old" ${gitSort==='old'?'selected':''}>oldest first</option>
         </select>
-        <label class="fdate" title="only commits on/after this date">from
-          <input type="date" value="${esc(gitFrom)}" onchange="gitFrom=this.value;T.git();"></label>
-        <label class="fdate" title="only commits on/before this date">to
-          <input type="date" value="${esc(gitTo)}" onchange="gitTo=this.value;T.git();"></label>
-        ${(q||gitAuthor||gitType||gitFrom||gitTo||gitSort!=='new')?`<button class="fclear" onclick="gitQuery='';gitAuthor='';gitType='';gitFrom='';gitTo='';gitSort='new';T.git();syncGlobalSearch('git');">✕ clear</button>`:''}
+        ${timeFilterUI()}
+        ${(q||gitAuthor||gitType||FILTER.from||FILTER.to||FILTER.quick||gitSort!=='new')?`<button class="fclear" onclick="gitQuery='';gitAuthor='';gitType='';gitSort='new';FILTER.from='';FILTER.to='';FILTER.quick='';T.git();syncGlobalSearch('git');">✕ clear</button>`:''}
       </div>
       <div class="git-grid">
         <div class="git-col">
@@ -3800,6 +4002,12 @@ T.about = () => {
 
       ${fact('Privacy','Your code, your index and every query stay on this machine. The index is one local SQLite file (<code>.mind/index.db</code>), the dashboard binds to localhost with a DNS-rebinding guard, there is no telemetry. The only thing ever checked online is your license/account — never your repo, your queries, or what you build.')}
 
+      <div class="ui-card" style="margin-top:16px">
+        <div class="ui-card__header"><div class="ui-card__title">Community &amp; source</div>
+          <div class="ui-card__desc">read every line that touches your repo · ask, report, suggest</div></div>
+        <div class="ui-card__content"><div class="about-links" id="about-links"></div></div>
+      </div>
+
     </div>`);
   const head = () => { const el=document.getElementById('about-head'); if(!el || !ABOUT) return;
     // the company name links home (owner: "mccain digital bitte noch verlinken")
@@ -3812,8 +4020,20 @@ T.about = () => {
       ? ` · <a href="${esc(ABOUT.vendor_url||'https://mccain-digital.com')}" target="_blank" rel="noopener">${esc(ABOUT.vendor_note)}</a>${ABOUT.support_email?` (support: ${esc(ABOUT.support_email)} · billing: ${esc(ABOUT.payment_email||'')})`:''}`
       : '';
     el.innerHTML = `<b>${esc(ABOUT.name)}</b> v${esc(ABOUT.version)} · ${cr} · licensed ${esc(ABOUT.license)} — your project's memory: written at commit time, recalled offline, zero tokens.${note}`; };
-  if(ABOUT){ head(); return; }
-  fetch('/api/about').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{ ABOUT=d; head(); })
+  // the GitHub + Discord icon links (owner 2026-06-13). The marks are inline
+  // SVG (no external request — same offline rule the rest of the dashboard
+  // keeps). Discord renders only when /api/about carries a real invite, so a
+  // local install with no community server set never shows a dead link.
+  const links = () => { const el=document.getElementById('about-links'); if(!el || !ABOUT) return;
+    const GH = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>`;
+    const DC = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#5865F2" d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189z"/></svg>`;
+    let html = '';
+    if(ABOUT.github_url) html += `<a class="about-link" href="${esc(ABOUT.github_url)}" target="_blank" rel="noopener">${GH}<span>GitHub</span></a>`;
+    if(ABOUT.discord_url) html += `<a class="about-link" href="${esc(ABOUT.discord_url)}" target="_blank" rel="noopener">${DC}<span>Discord</span></a>`;
+    if(!html) html = '<span class="muted" style="font-size:13px">community links not configured in this install</span>';
+    el.innerHTML = html; };
+  if(ABOUT){ head(); links(); return; }
+  fetch('/api/about').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{ ABOUT=d; head(); links(); })
     .catch(()=>{ const el=document.getElementById('about-head'); if(el) el.textContent='could not load product info'; });
 };
 
@@ -3876,6 +4096,13 @@ T.power = () => {
         <div class="ui-kv"><span class="ui-kv__k">Nodes</span><span class="ui-kv__v">${(DATA.stats&&DATA.stats.nodes||0).toLocaleString()}</span></div>`:''}
         <hr class="ui-sep" style="margin:12px 0">
         <button class="ui-btn ui-btn--primary ui-btn--lg" onclick="indexProject(this)">${indexed?'Re-index now':'Index now'}</button>
+        <div class="idx-note">
+          <b>A thin first index is normal — and totally fine.</b>
+          If your repo has few or messy code/commit comments, the first index may find
+          little. That just means the upside is ahead of you: from now on, <b>every commit
+          your AI makes stamps the code smarter</b>. Don't be fooled by a quiet start —
+          just start coding.
+        </div>
       </div>
     </div>`;
 
@@ -3913,6 +4140,13 @@ T.power = () => {
         <div style="display:flex;gap:10px">
           <button class="ui-btn ui-btn--outline" onclick="showPowerEstimate(this)" ${(CONN&&indexed&&!POWER_BUSY)?'':'disabled'}>Show estimate</button>
           <button class="ui-btn ui-btn--primary" id="power-run-btn" onclick="runPower(this)" ${canRun?'':'disabled'} style="flex:1;justify-content:center">${POWER_BUSY?'Running…':'Run Power Mode'}</button>
+        </div>
+        <div class="idx-note">
+          <b>Power Mode is optional — and the bootstrap is already strong.</b>
+          On a young or thinly-commented repo your AI may only find a handful of hotspots
+          worth enriching, and that is fine: the real value still comes from your everyday
+          commits, stamped <b>free and token-less</b>. Don't expect a flood on the first run —
+          recall gets richer the more you build, not the harder you push this button.
         </div>
       </div>
     </div>`;

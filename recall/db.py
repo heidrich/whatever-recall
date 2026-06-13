@@ -25,7 +25,7 @@ from pathlib import Path
 # dependency graph (PageRank over depends_on/co_changed edges). Write-time, model-free.
 # Lets recall split a code-track (ranked by importance) from a knowledge-track so a
 # commit never buries the central code symbol the query is really about.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # The FTS tokenizer, named once so _SCHEMA and the v4 migration can't drift apart.
 _FTS_TOKENIZE = "porter unicode61"
@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS edges (
     stamped_at_sha  TEXT,
     verified        INTEGER DEFAULT 1,
     power_run       INTEGER,         -- which Power-Mode run created this edge (ADR-008, undo as a unit)
-    base_sha        TEXT             -- repo HEAD the power run read against
+    base_sha        TEXT,            -- repo HEAD the power run read against
+    refined_from    TEXT             -- v6: the pre-refine kind, so `recall unrefine` can reset it
 );
 
 -- canonical anchor vocabulary (ADR-005: closed vocabulary, deduped here).
@@ -128,10 +129,11 @@ CREATE INDEX IF NOT EXISTS idx_na_node      ON node_anchors(node_id);
 # above; _migrate only heals an older on-disk index.
 _MIGRATIONS: dict[str, list[str]] = {
     "nodes": ["power_run", "base_sha", "author", "importance"],  # v2 + v3 + v5
-    "edges": ["power_run", "base_sha"],
+    "edges": ["power_run", "base_sha", "refined_from"],          # + v6 refine reversibility
 }
 _MIGRATION_COL_TYPE = {
     "power_run": "INTEGER", "base_sha": "TEXT", "author": "TEXT", "importance": "REAL DEFAULT 0",
+    "refined_from": "TEXT",
 }
 
 

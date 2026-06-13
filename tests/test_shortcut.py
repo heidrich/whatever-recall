@@ -4,19 +4,49 @@ import stat
 import sys
 from pathlib import Path
 
+import pytest
+
 from recall import shortcut
+from recall.cli import build_parser
 
 
 REPO = Path("C:/Users/me/projects/my repo") if sys.platform == "win32" else Path("/home/me/projects/my repo")
 
 
-def test_windows_spec_pins_repo_port_and_interpreter():
-    name, content = shortcut.launcher_spec(REPO, 7099, "C:/py/python.exe", platform="win32")
+@pytest.mark.parametrize("cmd", ["shortcut", "dashboard", "tray", "stop", "stats", "explain", "contested", "freshen"])
+def test_launcher_commands_accept_a_positional_path(cmd):
+    """Regression (audit 2026-06-13): `recall shortcut .` errored 'unrecognized
+    arguments: .' while `recall init .` worked — only init/power had a positional.
+    A user who learned `recall init .` types `recall <cmd> .` and must not hit an
+    error. The positional must parse AND reach the repo resolver as `path`."""
+    parser = build_parser()
+    args = parser.parse_args([cmd, "."])  # must not SystemExit
+    assert getattr(args, "path", None) == "."
+
+
+def test_repo_flag_still_parses_for_launcher_commands():
+    parser = build_parser()
+    args = parser.parse_args(["shortcut", "--repo", "."])
+    assert args.repo == "."
+
+
+def test_windows_spec_runs_tray_never_pause():
+    """The launcher always runs `recall tray`, never the old `dashboard ... pause` (closing
+    that window silently killed the server → the tab hung on RECONNECTING). Two modes:
+    windowless=True (tray extra) detaches via pythonw+start; windowless=False (base install)
+    keeps a VISIBLE console so the DO-NOT-CLOSE banner shows. Neither uses `pause`."""
+    name, win = shortcut.launcher_spec(REPO, 7099, "C:/py/python.exe", platform="win32", windowless=True)
     assert name == "recall-dashboard-my-repo.bat"
-    assert f'cd /d "{REPO}"' in content
-    assert '"C:/py/python.exe" -m recall.cli dashboard --port 7099' in content
-    assert content.startswith("@echo off")
-    assert "pause" in content  # errors stay readable after exit
+    assert f'cd /d "{REPO}"' in win
+    assert "-m recall.cli tray --port 7099" in win
+    assert "start " in win  # detached via `start` (pythonw used when it exists on disk)
+    assert "pause" not in win
+
+    _, vis = shortcut.launcher_spec(REPO, 7099, "C:/py/python.exe", platform="win32", windowless=False)
+    assert "-m recall.cli tray --port 7099" in vis
+    assert "start " not in vis  # visible console holds the server (banner must be seen)
+    assert "pause" not in vis
+    assert vis.startswith("@echo off")
 
 
 def test_darwin_spec_is_a_command_file():
@@ -79,13 +109,29 @@ def test_assets_ship_with_the_package():
 
 
 def test_cli_knows_the_subcommand():
-    """Drift-guard: bare-query routing must not swallow `recall shortcut` as a search."""
-    import inspect
-
+    """Drift-guard: bare-query routing must not swallow a real subcommand as a search.
+    `recall shortcut` resolves to cmd_shortcut, not to a query for the word 'shortcut'."""
     from recall import cli
 
-    src = inspect.getsource(cli.main)
-    assert '"shortcut"' in src, "add 'shortcut' to the known-subcommands set in cli.main"
     parser = cli.build_parser()
     args = parser.parse_args(["shortcut", "--port", "7042"])
     assert args.func is cli.cmd_shortcut and args.port == 7042
+
+
+def test_bare_query_router_covers_every_subcommand():
+    """Drift-guard (2026-06-13): the bare-query router used a hand-kept allowlist that
+    drifted — `tray`/`stop` fell through and were parsed as search queries. The known
+    set is now derived from the parser, so EVERY registered subcommand must be routed
+    as a command (never swallowed). This guard fails the moment that coupling breaks."""
+    from recall import cli
+
+    parser = cli.build_parser()
+    known = cli._subcommand_names(parser)
+    # the commands a new user is most likely to type and MUST not be eaten as a query
+    for cmd in ("tray", "stop", "shortcut", "dashboard", "init", "stats"):
+        assert cmd in known, f"`recall {cmd}` would be parsed as a search query, not a command"
+    # and the router actually consults the derived set, not a stale literal list
+    import inspect
+
+    src = inspect.getsource(cli.main)
+    assert "_subcommand_names" in src, "bare-query router must derive known cmds from the parser"

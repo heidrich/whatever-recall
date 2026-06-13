@@ -11,7 +11,10 @@ Reversible + safe by construction:
   - it ONLY ever changes the `kind` of existing depends_on edges — never creates edges,
     never deletes, never touches semantic edges a human/commit declared;
   - every label is re-validated against rules.edge_kinds (a hallucinated label is ignored);
-  - the original kind is recoverable: refined edges are marked so `unrefine` can reset them.
+  - the original kind is recorded in edges.refined_from before the first overwrite, so
+    `unrefine()` (and `recall unrefine`) resets every refined edge in full, loss-free;
+  - re-running re-classifies already-refined edges (refined_from='depends_on'), so a
+    better model run can correct an earlier label without a re-index.
 
 This is the optional intelligence layer. With no provider connected, the graph stays at
 the deterministic depends_on floor — still useful (measured: 68-79% of hits get a chain).
@@ -48,6 +51,7 @@ class RefineResult:
     edges_refined: int = 0       # depends_on -> a more specific kind
     edges_unchanged: int = 0     # stayed depends_on (model said so, or low confidence)
     dropped_labels: int = 0      # model returned a label outside the closed set
+    call_failures: int = 0       # model calls that errored (provider down) — NOT "no change"
     by_kind: dict[str, int] = field(default_factory=dict)
 
 
@@ -63,14 +67,17 @@ def refine_edges(index, provider, *, file_byte_cap: int = 6000,
     res = RefineResult()
     repo = Path(index._repo) if getattr(index, "_repo", None) else None
 
-    # gather depends_on edges grouped by source FILE (via the src node's file_path)
+    # gather refinable edges grouped by source FILE (via the src node's file_path).
+    # Includes edges ALREADY refined once (refined_from='depends_on') so a re-run can
+    # re-classify them — e.g. a fix that changes implements -> guarded_by. A pristine
+    # depends_on edge has refined_from IS NULL; a refined one carries its origin there.
     rows = index.db.execute(
         """
         SELECT e.id, ns.file_path AS src_file, nd.file_path AS dst_file
           FROM edges e
           JOIN nodes ns ON ns.id = e.src_node
           JOIN nodes nd ON nd.id = e.dst_node
-         WHERE e.kind = 'depends_on'
+         WHERE (e.kind = 'depends_on' OR e.refined_from = 'depends_on')
            AND ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL
         """
     ).fetchall()
@@ -83,6 +90,15 @@ def refine_edges(index, provider, *, file_byte_cap: int = 6000,
         res.files_seen += 1
         res.edges_considered += len(edges)
         labels = _classify_file(provider, repo, src_file, [d for _, d in edges], file_byte_cap)
+        if labels is None:  # the model call failed — count it, leave edges untouched
+            res.call_failures += 1
+            res.edges_unchanged += len(edges)
+            if progress is not None:
+                try:
+                    progress(n, total)
+                except Exception:
+                    pass
+            continue
         for eid, dst_file in edges:
             kind = labels.get(dst_file)
             if kind is None:
@@ -93,11 +109,18 @@ def refine_edges(index, provider, *, file_byte_cap: int = 6000,
                 res.edges_unchanged += 1
                 continue
             if kind == "depends_on":
+                # the model says plain dependency. If this edge was refined before,
+                # reset it (and forget the marker) so it's a clean depends_on again.
+                index.db.execute(
+                    "UPDATE edges SET kind='depends_on', refined_from=NULL "
+                    "WHERE id=? AND refined_from IS NOT NULL", (eid,))
                 res.edges_unchanged += 1
             else:
+                # record the ORIGINAL kind before the first overwrite (COALESCE keeps
+                # the very first origin across re-runs), so `unrefine` can reset it.
                 index.db.execute(
-                    "UPDATE edges SET kind=? WHERE id=?", (kind, eid)
-                )
+                    "UPDATE edges SET refined_from=COALESCE(refined_from, kind), kind=? "
+                    "WHERE id=?", (kind, eid))
                 res.edges_refined += 1
             res.by_kind[kind] = res.by_kind.get(kind, 0) + 1
         if progress is not None:
@@ -109,10 +132,26 @@ def refine_edges(index, provider, *, file_byte_cap: int = 6000,
     return res
 
 
+def unrefine(index) -> int:
+    """Reset every refined edge back to its original kind — the reverse of refine_edges.
+
+    Restores `kind = refined_from` and clears the marker for all edges that carry one.
+    Model-free, loss-free, idempotent (a second run finds nothing to reset). This is the
+    reversibility the module promises: a refine run that mislabeled edges can be undone
+    in full without re-indexing. Returns the number of edges reset."""
+    cur = index.db.execute(
+        "UPDATE edges SET kind=refined_from, refined_from=NULL "
+        "WHERE refined_from IS NOT NULL")
+    index.db.commit()
+    return cur.rowcount
+
+
 def _classify_file(provider, repo, src_file: str, targets: list[str],
-                   byte_cap: int) -> dict[str, str]:
-    """One model call: classify each dependency target of src_file. Returns {target: kind}.
-    Robust to a bad reply (returns {} -> all edges stay depends_on)."""
+                   byte_cap: int) -> dict[str, str] | None:
+    """One model call: classify each dependency target of src_file. Returns {target: kind}
+    on success ({} = a valid reply with no refinements), or None when the model call
+    ITSELF failed (provider down) — the caller counts that as a failure, not "no change",
+    so a fully-down provider can't masquerade as a healthy zero-refinement run."""
     source = ""
     if repo is not None:
         try:
@@ -125,7 +164,7 @@ def _classify_file(provider, repo, src_file: str, targets: list[str],
     try:
         resp = provider.complete(_SYSTEM, user, max_tokens=600)
     except Exception:
-        return {}
+        return None  # call failed (network/provider) — distinct from an empty reply
     return _parse_labels(resp.text, set(targets))
 
 

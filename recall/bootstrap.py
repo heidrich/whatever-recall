@@ -422,7 +422,14 @@ def _index_one_file(index: Index, repo: Path, path: Path, parser_for, stats: dic
         n += 1
     stats["code_symbols"] += n
     from recall.graph import import_paths
-    return import_paths(tree.root_node, src, lang)
+    try:
+        return import_paths(tree.root_node, src, lang)
+    except RecursionError:
+        # The import collectors walk the AST recursively; one pathologically
+        # deeply-nested file would otherwise raise RecursionError and abort the
+        # ENTIRE `recall init` with an empty index. Degrade to "no import edges
+        # for this one file" — symbols are already stamped above.
+        return []
 
 
 def _symbols(node, src: bytes, lang: str):
@@ -522,17 +529,40 @@ def _node_name(n, src: bytes) -> str | None:
 
 
 def _load_tree_sitter():
-    """Return a `parser_for(lang)` callable, or None if tree-sitter is absent."""
+    """Return a `parser_for(lang)` callable, or None if tree-sitter is absent.
+
+    The parsers this returns MUST accept `bytes` from `parser.parse(...)` — the
+    whole symbol pipeline (`_symbols`, `_docstring`, `import_paths`) slices the
+    raw `src` bytes by node byte-offsets.
+
+    We build parsers from upstream `tree_sitter.Parser(get_language(lang))`, NOT
+    `language_pack.get_parser(lang)`: on tree-sitter 0.25.x the convenience
+    `get_parser` returns a wrapper whose `Parser.parse` rejects `bytes` (wants a
+    `str`) and whose `Tree.root_node` is a zero-arg method — i.e. it breaks the
+    bytes contract and the Node API. `Parser(get_language(...))` is the stable,
+    bytes-accepting path across 0.21 → 0.25+. (Found by a fresh-venv install
+    audit 2026-06-13: `recall init .` crashed on the very first command with
+    "argument 'source': 'bytes' object is not an instance of 'str'".)"""
     try:
-        from tree_sitter_language_pack import get_parser
+        from tree_sitter import Parser
+        from tree_sitter_language_pack import get_language
     except Exception:
         return None
     _cache: dict[str, Any] = {}
 
+    def _build(lang: str):
+        language = get_language(lang)
+        try:
+            return Parser(language)            # tree-sitter 0.22+: Language in ctor
+        except TypeError:
+            parser = Parser()                  # 0.21 fallback: assign the language
+            parser.set_language(language)
+            return parser
+
     def parser_for(lang: str):
         if lang not in _cache:
             try:
-                _cache[lang] = get_parser(lang)
+                _cache[lang] = _build(lang)
             except Exception:
                 _cache[lang] = None
         return _cache[lang]
@@ -562,8 +592,11 @@ def _walk_source(repo: Path):
 def _git(repo: Path, *args: str) -> tuple[str, int, str]:
     """Run git, returning (stdout, returncode, stderr). returncode 127 = git absent."""
     try:
+        # core.quotepath=false: index non-ASCII file paths as raw UTF-8 so the
+        # anchors/co-change keys match what the freshness + contested readers
+        # see later (and what's on disk). Default C-quoting would mismatch both.
         p = subprocess.run(
-            ["git", "-C", str(repo), *args],
+            ["git", "-C", str(repo), "-c", "core.quotepath=false", *args],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         return p.stdout, p.returncode, p.stderr
@@ -657,7 +690,7 @@ def _co_change_from_commit(index: Index, files: list[str], stats: dict) -> None:
     src = _source_files_for_co_change(files)
     if len(src) < 2 or len(src) > _CO_CHANGE_MAX_FILES:
         return  # nothing to relate, or a sweep too broad to mean 'these belong together'
-    added = index.record_co_change(src)
+    added = index.record_co_change(src, rerank=False)  # init() re-ranks once at the end
     if added:
         stats["co_changed"] = stats.get("co_changed", 0) + added
     # implicit feedback: a touched file's code nodes proved worth surfacing. rerank=False

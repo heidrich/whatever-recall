@@ -36,7 +36,14 @@ The first public release — everything below ships on day one.
   marked `open` gets flagged — in the dashboard and as a one-line nudge on
   every commit — until you flip it to done. Your backlog can't quietly rot.
 - **`recall shortcut`** — a desktop launcher (with the recall icon) that starts
-  the dashboard with a double-click. No terminal, no AI needed.
+  the dashboard with a double-click. No terminal, no AI needed. It runs the
+  dashboard in the background (`recall tray` — a system-tray icon with the
+  `[tray]` extra, otherwise a console that loudly warns *don't close me*), so a
+  closed window can't silently take the server down. `recall stop` ends it
+  cleanly. And if the server ever blinks (a restart), the dashboard's live pill
+  reconnects in about a second instead of hanging.
+- **GitHub and Discord** are one click away — icons in the dashboard header link
+  straight to the repo and the community.
 
 ### The doors for your AI
 

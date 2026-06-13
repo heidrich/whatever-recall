@@ -16,8 +16,12 @@ from pathlib import Path
 def _git(repo: Path, *args: str) -> tuple[str, int]:
     """Run git, return (stdout, returncode). 127 = git absent / not a repo."""
     try:
+        # core.quotepath=false: without it git C-quotes any path byte > 0x7F
+        # ('"Gr\303\274\303\237e.py"'), so non-ASCII filenames never match the
+        # raw UTF-8 repo-relative keys used everywhere else — the churn map
+        # silently misses them. German project paths hit this routinely.
         p = subprocess.run(
-            ["git", "-C", str(repo), *args],
+            ["git", "-C", str(repo), "-c", "core.quotepath=false", *args],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         return p.stdout, p.returncode
@@ -56,7 +60,11 @@ def commit_files(repo: str | Path, sha: str = "HEAD") -> list[str]:
     file's briefing. Not a git repo / unknown sha / git absent -> [] (never raises). Kept
     here next to file_churn so the engine stays git-free and this stays unit-testable."""
     repo = Path(repo)
-    out, rc = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", sha)
+    # --root makes diff-tree list the full file set for a PARENTLESS (initial)
+    # commit, which otherwise produces no output (nothing to diff against). A new
+    # user's very first commit IS the root commit, so `recall review` on it would
+    # be empty without this. --root is a harmless no-op for normal commits.
+    out, rc = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha)
     if rc != 0 or not out:
         return []
     files: list[str] = []

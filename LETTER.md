@@ -60,7 +60,7 @@ I honestly don't know if this will solve all your problems — or whether it wil
 
 I would love to hear your honest thoughts on the machine-first future of software development.
 
-— Christian
+— Christian, co-founder, McCain Digital
 
 [whatever-recall.com](https://whatever-recall.com) · a product & service of [McCain Digital](https://mccain-digital.com)
 

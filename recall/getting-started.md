@@ -37,7 +37,7 @@ cd whatever-recall
 pip install -e ".[codemap]"
 ```
 
-`[codemap]` adds tree-sitter, so recall maps every function/class → file → line during indexing. (A plain `pip install whatever-recall` from PyPI ships with launch; until then `pip install git+https://github.com/heidrich/whatever-recall.git` works too.)
+`[codemap]` adds tree-sitter, so recall maps every function/class → file → line during indexing. (The current install is from git — `pip install git+https://github.com/heidrich/whatever-recall.git` also works without cloning. A plain `pip install whatever-recall` from PyPI is coming in a later release.)
 
 Check it worked:
 

@@ -263,64 +263,77 @@ def run_power(
                 pass  # a UI progress hook must never break the run
 
     _tick(0)
-    for n, h in enumerate(hotspots, start=1):
-        system, user = _prompt_for_hotspot(index, repo, h, file_byte_cap)
-        resp = provider.complete(system, user, max_tokens=output_budget * 2)
-        report = parse_with_report(resp.text, index.rules)
-        # surface schema mismatches loudly: a reply that yielded nothing for a REAL reason
-        # (bad JSON / no recognized node key) is counted, never swallowed (the dogfood bug).
-        if report.yielded_nothing:
-            result.responses_discarded += 1
-        if report.used_alt_key:
-            result.alt_keys_seen[report.used_alt_key] = (
-                result.alt_keys_seen.get(report.used_alt_key, 0) + 1
-            )
-        for inst in report.instructions:
-            res = index.stamp(
-                inst.title,
-                body=inst.body,
-                anchors=inst.anchors,
-                tags=inst.tags,
-                edges=inst.edges,
-                kind="lesson",
-                file_path=h.file_path,
-                sha=head,
-                origin="power",
-                power_run=run,
-                base_sha=head,
-            )
-            if res["action"] == "NEW":
-                result.nodes_added += 1
-                result.edges_added += len(inst.edges)
-            elif res["action"] == "MERGE":
-                # synonyms grafted onto a pre-existing node can't CASCADE on undo —
-                # record exactly what we added so undo_power_run removes precisely them.
-                syns = res.get("added_anchors") or []
-                if syns:
-                    added_anchors.setdefault(str(res["node_id"]), []).extend(syns)
-                    result.synonyms_added += len(syns)
-            result.dropped_tags += len(inst.dropped_tags)
-            result.dropped_edges += len(inst.dropped_edges)
-        _tick(n)  # one hotspot done -> update the live progress bar
-
-    # Persist the run record (estimate vs actual + the synonym ledger). Skipped on a
-    # dry run so a throwaway :memory: index leaves no trace — the caller shows the
-    # would-be result and discards it.
-    if not dry_run:
-        index.record_power_run(run, {
-            "base_sha": head,
-            "scope": scope,
-            "model": provider.model,
-            "status": "done",
-            "est_input_tokens": estimate.input_tokens,
-            "est_output_tokens": estimate.est_output_tokens,
-            "est_cost_usd": estimate.est_cost_usd,
-            "nodes_added": result.nodes_added,
-            "edges_added": result.edges_added,
-            "synonyms_added": result.synonyms_added,
-            "files": result.files,
-            "added_anchors": added_anchors,
-        })
+    # Track outcome so a provider failure mid-run is recorded (status "partial") rather
+    # than leaving orphan nodes with no run record. The CLI/dashboard still see the error
+    # (re-raised after recording), but `recall power --list` and `recall undo` now know
+    # about the partial run and its synonym ledger.
+    status = "done"
+    run_error: BaseException | None = None
+    try:
+        for n, h in enumerate(hotspots, start=1):
+            system, user = _prompt_for_hotspot(index, repo, h, file_byte_cap)
+            resp = provider.complete(system, user, max_tokens=output_budget * 2)
+            report = parse_with_report(resp.text, index.rules)
+            # surface schema mismatches loudly: a reply that yielded nothing for a REAL reason
+            # (bad JSON / no recognized node key) is counted, never swallowed (the dogfood bug).
+            if report.yielded_nothing:
+                result.responses_discarded += 1
+            if report.used_alt_key:
+                result.alt_keys_seen[report.used_alt_key] = (
+                    result.alt_keys_seen.get(report.used_alt_key, 0) + 1
+                )
+            for inst in report.instructions:
+                res = index.stamp(
+                    inst.title,
+                    body=inst.body,
+                    anchors=inst.anchors,
+                    tags=inst.tags,
+                    edges=inst.edges,
+                    kind="lesson",
+                    file_path=h.file_path,
+                    sha=head,
+                    origin="power",
+                    power_run=run,
+                    base_sha=head,
+                )
+                if res["action"] == "NEW":
+                    result.nodes_added += 1
+                    result.edges_added += len(inst.edges)
+                elif res["action"] == "MERGE":
+                    # synonyms grafted onto a pre-existing node can't CASCADE on undo —
+                    # record exactly what we added so undo_power_run removes precisely them.
+                    syns = res.get("added_anchors") or []
+                    if syns:
+                        added_anchors.setdefault(str(res["node_id"]), []).extend(syns)
+                        result.synonyms_added += len(syns)
+                result.dropped_tags += len(inst.dropped_tags)
+                result.dropped_edges += len(inst.dropped_edges)
+            _tick(n)  # one hotspot done -> update the live progress bar
+    except (KeyboardInterrupt, Exception) as e:  # noqa: BLE001 — record then re-raise
+        status = "interrupted" if isinstance(e, KeyboardInterrupt) else "partial"
+        run_error = e
+    finally:
+        # Persist the run record (estimate vs actual + the synonym ledger) even on a
+        # partial/interrupted run, so the already-stamped nodes are listed and fully
+        # undoable (with their synonym ledger). Skipped on a dry run so a throwaway
+        # :memory: index leaves no trace — the caller shows the result and discards it.
+        if not dry_run:
+            index.record_power_run(run, {
+                "base_sha": head,
+                "scope": scope,
+                "model": provider.model,
+                "status": status,
+                "est_input_tokens": estimate.input_tokens,
+                "est_output_tokens": estimate.est_output_tokens,
+                "est_cost_usd": estimate.est_cost_usd,
+                "nodes_added": result.nodes_added,
+                "edges_added": result.edges_added,
+                "synonyms_added": result.synonyms_added,
+                "files": result.files,
+                "added_anchors": added_anchors,
+            })
+    if run_error is not None:
+        raise run_error
     return result
 
 

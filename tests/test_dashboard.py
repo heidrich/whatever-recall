@@ -128,10 +128,45 @@ def test_snapshot_has_the_keys_the_page_reads(served):
     assert {"branches", "commits", "tree"} <= set(snap["git"])
 
 
+def test_pulse_reports_auto_on_from_watch_state(served):
+    """/api/pulse must expose auto.on so the page knows live mode is running.
+    (Bug 2026-06-13: on a fresh restart the pill stuck at READ-ONLY with a spinning
+    ring because the page raced the watcher's late `on=True`. The fix sets it
+    synchronously in serve(); the pulse contract that carries it is pinned here.)"""
+    base, _ = served
+    status, body = _get(base, "/api/pulse")
+    assert status == 200
+    p = json.loads(body)
+    assert "auto" in p and "on" in p["auto"]
+    assert isinstance(p["auto"]["on"], bool)
+
+
+def test_dashboard_html_carries_the_reconnect_recovery(served):
+    """The page must recover from a server restart, not strand at read-only with a
+    perpetual spinner (owner: 'das ist beim Server-Neustart immer kaputt'). Pin the
+    client-side seam: a failed pulse shows 'reconnecting…' and retries fast."""
+    base, _ = served
+    _, html = _get(base, "/")
+    assert "reconnecting…" in html
+    assert "_pulseFail" in html
+    assert "live--recon" in html
+
+
 def test_page_serves_html(served):
     base, _ = served
     status, body = _get(base, "/")
     assert status == 200 and "<html" in body.lower()
+
+
+def test_header_bar_is_responsive_for_laptops(served):
+    """The header packed ~10 controls in one nowrap row and overflowed off-screen
+    below 1920px (owner 2026-06-13: 'das tool wird unter 1920 komplett zerschossen,
+    muss bis ~1200 laufen'). Pin the fix: the bar wraps, and the laptop breakpoint
+    drops the global search to its own row so the controls fit on common laptops."""
+    base, _ = served
+    _, html = _get(base, "/")
+    assert ".bar{display:flex;align-items:center;flex-wrap:wrap" in html
+    assert "max-width:1600px" in html  # the laptop ladder: search → own full-width row
 
 
 def test_page_html_is_served_fresh_per_request(tmp_path, monkeypatch):
@@ -863,6 +898,19 @@ def test_about_reports_product_facts(served):
     assert d["name"] == "whatever-recall"
     assert d["license"].startswith("Business Source License")
     assert d["version"] and d["copyright"]
+
+
+def test_about_carries_community_links(served):
+    """About tab community links (owner 2026-06-13): GitHub is always present;
+    Discord is null unless a real invite is configured, so the dashboard never
+    renders a dead link. The About panel must carry the container they render into."""
+    base, _repo = served
+    _status, body = _get(base, "/api/about")
+    d = json.loads(body)
+    assert "github.com" in (d.get("github_url") or "")
+    assert "discord_url" in d  # the key always exists; value is None without RECALL_DISCORD_INVITE
+    _, html = _get(base, "/")
+    assert 'id="about-links"' in html  # the container the icon links paint into
 
 
 def test_legal_serves_license_and_commercial_verbatim(served):

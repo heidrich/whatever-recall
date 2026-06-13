@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import os
 import time
 from pathlib import Path
 
@@ -42,6 +43,14 @@ def decode_token(token: str) -> dict | None:
         return None
     if not all(k in payload for k in _REQUIRED_CLAIMS):
         return None
+    # exp must be int-coercible: a hand-edited / buggy token with exp="soon" would
+    # otherwise make int(exp) raise downstream in _with_state() (load_license is
+    # called unguarded by the dashboard -> a 500 / dropped connection). Reject here
+    # so a corrupt token reads as "signed out", not a crash.
+    try:
+        int(payload.get("exp", 0))
+    except (TypeError, ValueError):
+        return None
     return payload
 
 
@@ -55,8 +64,31 @@ def save_license(token: str) -> dict:
             "this token is already expired — issue a fresh one at whatever-recall.com/account"
         )
     LICENSE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LICENSE_PATH.write_text(token.strip(), encoding="utf-8")
+    _write_private(LICENSE_PATH, token.strip())
     return _with_state(payload)
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write `text` to `path` as an owner-only (0o600) file with NO world-readable window.
+
+    The token carries the buyer's email + plan — a real credential. We open with mode
+    0o600 from the start (os.open with O_CREAT) so the bytes are never group/world-readable
+    even briefly (the write_text-then-chmod TOCTOU gap). We do NOT touch the parent dir's
+    mode: ~/.recall is shared with connect.json/recent.json/rules.md, and clobbering its
+    perms on every save would strip a permission the user set on purpose. On Windows the
+    POSIX mode is ignored by the OS (the dev's own platform) — harmless, NTFS ACLs apply."""
+    data = text.encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    # O_CREAT honours the mode only when CREATING; an existing file keeps its old mode,
+    # so re-assert 0o600 on overwrite (still no widening — owner-only either way).
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def load_license() -> dict | None:
@@ -82,7 +114,10 @@ def clear_license() -> bool:
 
 def _with_state(payload: dict) -> dict:
     now = int(time.time())
-    exp = int(payload.get("exp", 0))
+    try:
+        exp = int(payload.get("exp", 0))
+    except (TypeError, ValueError):
+        exp = 0  # unparseable exp -> treat as already expired, never raise
     out = dict(payload)
     out["expired"] = exp <= now
     out["days_left"] = max(0, (exp - now + 86399) // 86400)

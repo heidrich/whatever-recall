@@ -47,8 +47,10 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import subprocess
 import threading
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -726,6 +728,36 @@ _WATCH_LOCK = threading.Lock()
 _WATCH_STATE: dict = {"on": False, "last_head": None, "last_index_ts": None,
                       "last_added": 0, "indexing": False}
 
+# the running server, so the tray menu / `recall stop` / a localhost POST can stop it
+# cleanly (without killing the process out from under unsaved tray state).
+_HTTPD = None  # set by serve(); a _Server while a dashboard is running
+
+
+class _Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer with allow_reuse_address=False.
+
+    The base class sets allow_reuse_address=True. On Linux that only reuses a
+    TIME_WAIT socket; on Windows SO_REUSEADDR lets a SECOND process bind a port
+    that is ACTIVELY in use — so two dashboards could end up on :7099, the lock
+    would be clobbered, and `recall stop` could only reach one. False makes the
+    second bind fail with OSError, which serve() turns into a clean message."""
+
+    allow_reuse_address = False
+
+
+def request_shutdown() -> bool:
+    """Ask the running dashboard to stop. Safe to call from any thread or twice.
+
+    Returns True if a server was running and shutdown was signalled. shutdown() must
+    run off the serve_forever() thread (it blocks until the loop exits), so we spawn a
+    tiny thread for it — the tray's main loop and `/api/shutdown` both call this."""
+    global _HTTPD
+    httpd = _HTTPD
+    if httpd is None:
+        return False
+    threading.Thread(target=httpd.shutdown, daemon=True).start()
+    return True
+
 
 def _auto_index(repo: Path, idx_path: Path, since_sha: str | None = None) -> dict:
     """Update the index for the latest commit and report how much changed.
@@ -978,6 +1010,20 @@ def _make_handler(repo: Path, idx_path: Path):
                 return False
 
         def do_GET(self):
+            # Error boundary: log_message is silenced (no per-request noise), so an
+            # uncaught route exception — Index.open on a corrupt/locked .mind, a read
+            # OperationalError racing the watcher — would otherwise just drop the
+            # socket and leave the page spinning on `fetch` forever with no message.
+            # Turn any such failure into a JSON 500 the page can actually render.
+            try:
+                self._route_get()
+            except Exception as e:
+                try:
+                    self._json(500, {"error": f"{type(e).__name__}: {e}"})
+                except Exception:
+                    pass
+
+        def _route_get(self):
             path = urlparse(self.path).path
             # The page shell + vendored assets are static + non-sensitive (no repo data),
             # so they load even under an odd Host; every data/file endpoint is gated.
@@ -1073,6 +1119,17 @@ def _make_handler(repo: Path, idx_path: Path):
             self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
+            # Same error boundary as do_GET: a mutating route that raises must
+            # return a JSON 500 the page can show, not silently drop the socket.
+            try:
+                self._route_post()
+            except Exception as e:
+                try:
+                    self._json(500, {"error": f"{type(e).__name__}: {e}"})
+                except Exception:
+                    pass
+
+        def _route_post(self):
             path = urlparse(self.path).path
             if not self._host_ok():  # belt-and-braces with the per-handler same-origin check
                 return self._json(403, {"error": "bad Host header (DNS-rebinding guard)"})
@@ -1097,7 +1154,28 @@ def _make_handler(repo: Path, idx_path: Path):
             if path == "/api/license":
                 self._do_license()
                 return
+            if path == "/api/shutdown":
+                self._do_shutdown()
+                return
             self._send(404, b"not found", "text/plain")
+
+        def _do_shutdown(self):
+            """Stop the server on request — what `recall stop` and the tray Quit call.
+            Loopback-only AND same-origin: the TCP peer must be loopback (blocks off-box),
+            and _same_origin() blocks a cross-site CSRF POST — a page on evil.com can reach
+            127.0.0.1 through the victim's browser (loopback peer, loopback Host), so the
+            Origin check is the one that stops a drive-by shutdown. Same gate every other
+            mutating POST uses; this endpoint must not be the exception."""
+            try:
+                peer = self.client_address[0]
+                if not ipaddress.ip_address(peer).is_loopback:
+                    return self._json(403, {"error": "shutdown is loopback-only"})
+            except (ValueError, IndexError):
+                return self._json(403, {"error": "shutdown is loopback-only"})
+            if not self._same_origin():
+                return self._json(403, {"error": "cross-origin shutdown refused"})
+            self._json(200, {"stopping": True})
+            request_shutdown()
 
         def _serve_file(self):
             """Read one repo file (jailed, capped) and return it as JSON so the page can
@@ -1678,6 +1756,13 @@ def _make_handler(repo: Path, idx_path: Path):
                                "info & payment mail comes from @mccain-digital.com",
                 "support_email": "support@mccain-digital.com",
                 "payment_email": "payment@mccain-digital.com",
+                # community links for the About tab (owner 2026-06-13: "hinter
+                # about noch das discord und github icon mit den links dazu").
+                # The community Discord — a permanent, non-expiring invite (owner
+                # 2026-06-13). An env override lets a fork point elsewhere; the
+                # default is the real recall community so the icon ships live.
+                "github_url": "https://github.com/heidrich/whatever-recall",
+                "discord_url": os.environ.get("RECALL_DISCORD_INVITE") or "https://discord.gg/bMYYHByFW6",
             })
 
         def _serve_legal(self):
@@ -1739,15 +1824,39 @@ def serve(repo: Path, idx_path: Path, *, host: str = "127.0.0.1", port: int = 70
     `watch=True` (the default) starts the live auto-index thread: a new commit gets
     indexed on its own, so the dashboard stays current without a reload. Pass
     watch=False (`--no-watch`) to run a purely passive viewer."""
+    global _HTTPD
     handler, state = _make_handler(repo, idx_path)
-    httpd = ThreadingHTTPServer((host, port), handler)
+    try:
+        httpd = _Server((host, port), handler)
+    except OSError:
+        # allow_reuse_address=False (set on _Server) makes a second bind to an
+        # ACTIVELY-in-use port fail here instead of — on Windows, where
+        # SO_REUSEADDR permits it — quietly starting a SECOND server on the
+        # same port and clobbering the run-lock so `recall stop` can't reach it.
+        # No lock is written, so an already-running dashboard stays reachable.
+        print(f"recall · port {port} is already in use — a dashboard may already "
+              f"be running.")
+        print(f"  open http://{host}:{port} , run `recall stop`, or use "
+              f"`--port <other>`.")
+        return 1
+    _HTTPD = httpd
+    lock = _write_lock(repo, host, port)
     url = f"http://{host}:{port}"
 
     stop = threading.Event()
     watcher: threading.Thread | None = None
     if watch:
+        # Set on=True SYNCHRONOUSLY, before serve_forever() answers a single request.
+        # (Bug, fresh-restart: the page reloads against the new server and its first
+        # /api/pulse used to race the watcher thread — if it landed before the thread
+        # reached its own `on=True`, the pill flipped to "read-only" and the ring spun
+        # forever until the next 30s poll. The watcher being live is a fact the instant
+        # watch=True, not news the thread announces late.)
+        _WATCH_STATE["on"] = True
         watcher = threading.Thread(target=_watch_loop, args=(state, stop), daemon=True)
         watcher.start()
+    else:
+        _WATCH_STATE["on"] = False
 
     print(f"recall · dashboard on {url}  (reading {idx_path}, read-only)")
     print("  live mode " + ("on — new commits auto-index" if watch else "off (--no-watch)"))
@@ -1764,4 +1873,140 @@ def serve(repo: Path, idx_path: Path, *, host: str = "127.0.0.1", port: int = 70
     finally:
         stop.set()
         httpd.server_close()
+        _HTTPD = None
+        _clear_lock(lock)
     return 0
+
+
+# ----------------------------------------------------------- run-lock (for `recall stop`)
+# One lock FILE PER PORT (`dashboard-<port>.lock`), not one per repo: a user can run
+# `recall tray` on 7099 AND `recall dashboard --port 7100` for the SAME repo, and each
+# server must be individually findable + stoppable. A single shared lock would let the
+# second server clobber the first's record, orphaning it (no lock points at it, so
+# `recall stop` could never reach it). The legacy `dashboard.lock` is still READ so an
+# index written by an older version keeps working.
+def _lock_path(repo: Path, port: int) -> Path:
+    return repo / ".mind" / f"dashboard-{port}.lock"
+
+
+def _legacy_lock_path(repo: Path) -> Path:
+    return repo / ".mind" / "dashboard.lock"
+
+
+def _parse_lock(p: Path) -> dict | None:
+    try:
+        host, port, pid = p.read_text(encoding="utf-8").splitlines()[:3]
+        return {"host": host.strip(), "port": int(port), "pid": int(pid), "_path": p}
+    except (OSError, ValueError):
+        return None
+
+
+def _all_lock_paths(repo: Path) -> list[Path]:
+    d = repo / ".mind"
+    try:
+        paths = sorted(d.glob("dashboard-*.lock"))
+    except OSError:
+        paths = []
+    legacy = _legacy_lock_path(repo)
+    if legacy.exists():
+        paths.append(legacy)
+    return paths
+
+
+def _write_lock(repo: Path, host: str, port: int) -> Path:
+    """Record host/port/pid so `recall stop` (a separate process) can find this server.
+    Best-effort: a lock-write failure must never stop the dashboard from serving."""
+    p = _lock_path(repo, port)
+    try:
+        p.parent.mkdir(exist_ok=True)
+        p.write_text(f"{host}\n{port}\n{os.getpid()}\n", encoding="utf-8")
+    except OSError:
+        pass
+    return p
+
+
+def _clear_lock(lock: Path) -> None:
+    try:
+        lock.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _loopback_host(host: str) -> str:
+    """The address to CONNECT to for a server BOUND to `host`. A wildcard bind
+    (0.0.0.0 / :: / '') accepts connections but is not itself a connectable
+    address — on Windows connect() to 0.0.0.0 fails with WSAEADDRNOTAVAIL, so a
+    dashboard started with `--host 0.0.0.0` could never be probed or stopped.
+    Map any wildcard to loopback; leave a concrete host untouched."""
+    return "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+
+
+def read_locks(repo: Path) -> list[dict]:
+    """Every dashboard recorded for this repo (one per port), newest first. Each
+    dict carries host/port/pid plus the lock file's path under '_path'."""
+    locks = [lk for p in _all_lock_paths(repo) if (lk := _parse_lock(p))]
+    # newest first by mtime so read_lock() (singular) prefers the latest start
+    locks.sort(key=lambda lk: lk["_path"].stat().st_mtime if lk["_path"].exists() else 0,
+               reverse=True)
+    return locks
+
+
+def read_lock(repo: Path) -> dict | None:
+    """The most-recently-started dashboard recorded for this repo, or None.
+
+    A lock only means a server WAS started — it lingers after a crash/hard-close (the
+    serve() finally that clears it never runs). Callers that need 'is one actually
+    serving right now?' must probe with is_dashboard_live(), not trust the file.
+    For the all-servers view use read_locks()."""
+    locks = read_locks(repo)
+    if not locks:
+        return None
+    info = locks[0]
+    return {"host": info["host"], "port": info["port"], "pid": info["pid"]}
+
+
+def is_dashboard_live(repo: Path) -> dict | None:
+    """A dashboard that is ACTUALLY answering for this repo, else None — clearing any
+    stale locks as a side effect. A cheap loopback GET /api/pulse is the heartbeat (the
+    same probe the MCP status uses). Probes every recorded port (newest first) so a
+    stale newest lock can't hide a live older server. This is what 'already running?'
+    checks must call so a stale lock can't make us open a dead URL or refuse to start."""
+    for info in read_locks(repo):
+        try:
+            host = _loopback_host(info["host"])
+            url = f"http://{host}:{info['port']}/api/pulse"
+            with urllib.request.urlopen(url, timeout=2) as r:  # noqa: S310 (loopback only)
+                r.read(1)
+            return {"host": info["host"], "port": info["port"], "pid": info["pid"]}
+        except Exception:
+            _clear_lock(info["_path"])  # this lock lied — tidy up so the state is honest
+    return None
+
+
+def stop(repo: Path) -> tuple[bool, str]:
+    """Stop EVERY dashboard running for this repo (one per port), found via its run-lock.
+    Each: a clean loopback POST /api/shutdown; a stale lock (no server) is just cleared.
+    Returns (any_stopped, human message). Stopping all is what makes a second dashboard
+    on a different port reachable — a single-lock design would orphan the first."""
+    locks = read_locks(repo)
+    if not locks:
+        return (False, "no dashboard running for this project")
+    stopped: list[int] = []
+    stale = 0
+    for info in locks:
+        host = _loopback_host(info["host"])  # a 0.0.0.0 bind isn't connectable on Windows
+        url = f"http://{host}:{info['port']}/api/shutdown"
+        try:
+            req = urllib.request.Request(url, method="POST", data=b"")
+            with urllib.request.urlopen(req, timeout=3) as r:  # noqa: S310 (loopback only)
+                r.read()
+            stopped.append(info["port"])
+        except Exception:
+            stale += 1  # server gone but lock lingered (crash / hard-close)
+        finally:
+            _clear_lock(info["_path"])  # always tidy up so the state stays honest
+    if stopped:
+        ports = ", ".join(str(p) for p in stopped)
+        return (True, f"stopped dashboard on port {ports}")
+    return (False, f"no live dashboard (cleared {stale} stale lock"
+                   f"{'s' if stale != 1 else ''})")

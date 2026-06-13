@@ -25,8 +25,36 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import urllib.error
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+
+def _http_complete(req, *, timeout: int, what: str) -> dict:
+    """POST a urllib Request and return the parsed JSON body, turning every transport
+    failure into a clean RuntimeError (mirrors ClaudeCliProvider). Without this a
+    provider exception escapes as a raw traceback on the CLI power path (the dashboard
+    worker already guards its own call). `what` names the provider for the message."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            pass
+        raise RuntimeError(f"{what} returned HTTP {e.code}: {detail or e.reason}") from e
+    except (urllib.error.URLError, TimeoutError, socket.timeout, ConnectionError) as e:
+        reason = getattr(e, "reason", e)
+        raise RuntimeError(f"{what} unreachable: {reason}") from e
+    try:
+        return json.loads(raw.decode("utf-8", "replace"))
+    except (ValueError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"{what} returned a non-JSON response") from e
 
 from recall.connect import Connection, load_connection
 
@@ -207,8 +235,14 @@ class OllamaProvider:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        body = _http_complete(
+            req, timeout=120,
+            what=f"Ollama at {self.base_url} (is `ollama serve` running?)",
+        )
+        # Ollama returns a 200 with {"error": ...} for some failures (e.g. model not
+        # pulled) — surface that loudly instead of a silent empty completion.
+        if body.get("error"):
+            raise RuntimeError(f"Ollama error: {body['error']}")
         text = (body.get("message") or {}).get("content", "")
         return LLMResponse(
             text=text,
@@ -321,8 +355,7 @@ class OpenAICompatProvider:
             headers=headers,
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        body = _http_complete(req, timeout=180, what=f"the endpoint at {url}")
         choices = body.get("choices") or [{}]
         text = ((choices[0].get("message") or {}).get("content")) or ""
         usage = body.get("usage") or {}

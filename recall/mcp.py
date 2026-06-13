@@ -451,12 +451,24 @@ def handle(msg: dict, session: _Session) -> dict | None:
 
     Pure function over (message, session) — the tests drive it directly, the
     stdio loop in serve() is just framing around it."""
+    # A valid-JSON-but-non-object message (a bare number/string/null, or a
+    # JSON-RPC 2.0 batch array) would make every `msg.get(...)` below raise
+    # AttributeError and — without the serve()-level guard — kill the whole
+    # stdio loop. The spec answer to a non-object request is -32600.
+    if not isinstance(msg, dict):
+        return _err(None, -32600, "Invalid Request: message must be a JSON object")
     method = msg.get("method")
     msg_id = msg.get("id")
     is_request = "id" in msg
 
+    # params may be absent or — from a misbehaving client — a non-object.
+    # Coerce to {} so the per-method `.get(...)` below can never raise.
+    params = msg.get("params")
+    if not isinstance(params, dict):
+        params = {}
+
     if method == "initialize":
-        client_ver = (msg.get("params") or {}).get("protocolVersion")
+        client_ver = params.get("protocolVersion")
         # version negotiation (spec): echo a supported client version, else offer
         # our latest — the client decides whether to proceed.
         ver = client_ver if client_ver in _SUPPORTED_VERSIONS else _SUPPORTED_VERSIONS[0]
@@ -478,7 +490,6 @@ def handle(msg: dict, session: _Session) -> dict | None:
         ]})
 
     if method == "tools/call":
-        params = msg.get("params") or {}
         name = params.get("name")
         tool = next((t for t in _TOOLS if t["name"] == name), None)
         if tool is None:
@@ -502,7 +513,6 @@ def handle(msg: dict, session: _Session) -> dict | None:
         ]})
 
     if method == "prompts/get":
-        params = msg.get("params") or {}
         name = params.get("name")
         prompt = next((p for p in _PROMPTS if p["name"] == name), None)
         if prompt is None:
@@ -546,7 +556,15 @@ def serve(repo: str | Path | None = None) -> int:
         except json.JSONDecodeError as e:
             out: dict | None = _err(None, -32700, f"Parse error: {e}")
         else:
-            out = handle(msg, session)
+            # Defense in depth: NO handler exception may ever break the stdio
+            # loop — that would silently kill the whole MCP connection in
+            # Claude/Cursor. Any uncaught error becomes a JSON-RPC -32603.
+            try:
+                out = handle(msg, session)
+            except Exception as e:
+                traceback.print_exc(file=sys.stderr)
+                msg_id = msg.get("id") if isinstance(msg, dict) else None
+                out = _err(msg_id, -32603, f"Internal error: {type(e).__name__}: {e}")
         if out is not None:
             # ensure_ascii=False -> real UTF-8; dumps without indent emits no newlines
             print(json.dumps(out, ensure_ascii=False), flush=True)

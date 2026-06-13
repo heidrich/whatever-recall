@@ -55,8 +55,11 @@ def _git(repo: Path, *args: str) -> tuple[str, int]:
     from the 🟠 set. Callers that want trimming do it per-line themselves.
     """
     try:
+        # core.quotepath=false: keep non-ASCII paths as raw UTF-8 so an edited
+        # file like 'Grüße.py' is matched (and shows 🟠 drift) instead of being
+        # silently reported fresh — git's default C-quoting mangles the key.
         p = subprocess.run(
-            ["git", "-C", str(repo), *args],
+            ["git", "-C", str(repo), "-c", "core.quotepath=false", *args],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         return p.stdout.rstrip("\n"), p.returncode

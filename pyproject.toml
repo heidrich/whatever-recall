@@ -22,8 +22,12 @@ bridge = ["fastapi>=0.110", "uvicorn>=0.29"]
 # install NEVER pulls an LLM SDK — the recall read path stays LLM-free (ADR-012).
 # Ollama (local, free) needs no dependency at all (pure stdlib urllib).
 power = ["anthropic>=0.40"]
+# Tray app (`recall tray`): run the dashboard in the background with a system-tray icon
+# so there's no console window to accidentally close. Without it, `recall tray` falls
+# back to a visible console with a loud DO-NOT-CLOSE banner — never a silent crash.
+tray = ["pystray>=0.19", "Pillow>=10.0"]
 # Everything.
-all = ["tree-sitter>=0.21", "tree-sitter-language-pack>=0.1", "fastapi>=0.110", "uvicorn>=0.29", "anthropic>=0.40"]
+all = ["tree-sitter>=0.21", "tree-sitter-language-pack>=0.1", "fastapi>=0.110", "uvicorn>=0.29", "anthropic>=0.40", "pystray>=0.19", "Pillow>=10.0"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

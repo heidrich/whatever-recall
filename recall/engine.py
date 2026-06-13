@@ -919,15 +919,24 @@ class Index:
     def _dedupe_results(self, scored: list[tuple]) -> list[tuple]:
         """Collapse rows that point at the same knowledge — git history often has
         a merge + the direct commit with an identical (title, file). Keep the
-        highest-scored representative; scored is already score-descending."""
+        highest-scored representative; scored is already score-descending.
+
+        Code symbols are NOT collapsed by (title, file): one file can define
+        several distinct symbols of the same name (two `__init__`s, a `render`
+        per class), each a separate node — keying on the symbol's line keeps them
+        distinct. Only knowledge (commit/lesson) rows merge on (title, file)."""
         seen: set[tuple] = set()
         out: list[tuple] = []
         for s in scored:
             node_id = s[0]
             row = self.db.execute(
-                "SELECT title, file_path FROM nodes WHERE id=?", (node_id,)
+                "SELECT title, file_path, kind, symbol, line FROM nodes WHERE id=?",
+                (node_id,),
             ).fetchone()
-            key = (row["title"], row["file_path"])
+            if row["kind"] == "code-symbol":
+                key = ("code", row["file_path"], row["symbol"], row["line"], node_id)
+            else:
+                key = ("knowledge", row["title"], row["file_path"])
             if key in seen:
                 continue
             seen.add(key)
@@ -1168,11 +1177,25 @@ class Index:
                 "blast_radius": blast, "open_tasks": open_tasks}
 
     def _dedupe_track(self, items: list[dict]) -> list[dict]:
-        """Collapse rows pointing at the same (title, file) — keep the first (best-ranked)."""
+        """Collapse genuine duplicates — keep the first (best-ranked).
+
+        Knowledge rows (commits/lessons) legitimately duplicate by (title, file):
+        git history carries a merge + the direct commit with an identical pair, so
+        collapsing on (title, file) is right. Code rows do NOT: one file routinely
+        defines several DISTINCT symbols with the same name (two `__init__`s, a
+        `render`/`handler`/`forward` per class), each a separate node — collapsing
+        them on (title, file) silently drops real, different code locations. So for
+        code rows the identity is the symbol's own line (its node), not its name."""
         seen: set[tuple] = set()
         out: list[dict] = []
         for it in items:
-            key = (it.get("title"), it.get("file"))
+            if it.get("symbol") is not None or it.get("line") is not None:
+                # code-symbol row: distinct symbols at distinct lines are distinct
+                key = ("code", it.get("file"), it.get("symbol"), it.get("line"),
+                       it.get("node_id"))
+            else:
+                # knowledge row: a merge + direct commit legitimately duplicate
+                key = ("knowledge", it.get("title"), it.get("file"))
             if key in seen:
                 continue
             seen.add(key)
@@ -1379,7 +1402,8 @@ class Index:
         self.db.commit()
         return added
 
-    def record_co_change(self, files, *, kind: str = "co_changed", sha: str = "session") -> int:
+    def record_co_change(self, files, *, kind: str = "co_changed", sha: str = "session",
+                         rerank: bool = True) -> int:
         """Link the files touched together in ONE coding session (ADR-015: heal while
         coding). Unlike depends_on (A imports B, directional, from the AST), co_changed
         captures the *invisible* relation — files that must change together but don't
@@ -1428,10 +1452,12 @@ class Index:
                     )
                     added += 1
         self.db.commit()
-        if added:
+        if added and rerank:
             # New relations changed the causal graph -> re-rank (model-free, ADR-016).
             # This is the 'heal while coding' payoff: the session's edits immediately
-            # lift the importance of the files they wired together.
+            # lift the importance of the files they wired together. rerank=False during
+            # init()/update_incremental(), which re-rank ONCE at the end — otherwise a
+            # full PageRank runs per commit (~60×), every intermediate result throwaway.
             from recall.importance import persist_importance
             persist_importance(self.db)
         return added

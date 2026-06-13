@@ -40,9 +40,15 @@ The methodology ships with this repo — run it yourself: `python experiments/be
 
 ## See it
 
-The local dashboard, running on this repository's own memory:
+The local dashboard, running on this repository's own memory. Open one file and the
+whole causal chain is already there — **what** it is, **why** it's that way, **what**
+breaks if you touch it, and **what** it leans on — built passively, at write-time:
 
-![The wiki — every lesson is a walkable story from request to result](docs/screenshots/wiki-lesson-story.png)
+![One file, the whole causal chain — open tasks, the why, what breaks, what it leans on](docs/screenshots/wiki-reverse-panel.png)
+
+![Start here — onboard a human or an AI in one view: files by importance, must-know decisions, what's in progress](docs/screenshots/start-here.png)
+
+![The live overview — knowledge, freshness and recall at a glance, for coders and PMs](docs/screenshots/overview.png)
 
 ![Plans, wired to the code — tasks carry progress bars and the files they affect](docs/screenshots/tasks-plans.png)
 
@@ -52,7 +58,7 @@ The local dashboard, running on this repository's own memory:
 
 ![The living product map — features with their decisions, code and commits](docs/screenshots/product-map.png)
 
-More in [docs/screenshots/](docs/screenshots/) — including [dark mode](docs/screenshots/dark-mode.png), the [pre-edit briefing](docs/screenshots/pre-edit-briefing.png) and the [first-start tour](docs/screenshots/start-here.png).
+More in [docs/screenshots/](docs/screenshots/) — including [dark mode](docs/screenshots/dark-mode.png), the [pre-edit briefing](docs/screenshots/pre-edit-briefing.png) and [the wiki as a walkable story](docs/screenshots/wiki-lesson-story.png).
 
 ## How it works (for devs who want to verify the trust)
 
@@ -79,7 +85,7 @@ Or do it yourself:
 ```bash
 git clone https://github.com/heidrich/whatever-recall.git
 cd whatever-recall
-pip install -e ".[codemap]"        # tree-sitter code map; a plain PyPI install ships with launch
+pip install -e ".[codemap]"        # tree-sitter code map (a plain PyPI install is coming in a later release)
 
 cd /path/to/your-project
 recall init .                      # token-free bootstrap -> .mind/index.db

@@ -93,10 +93,23 @@ def resolve_import(spec: str, from_rel: str, repo_files: set[str],
 
     candidates: list[str] = []
     if spec.startswith("."):
-        # relative to the importing file's directory
         base = os.path.dirname(from_rel)
-        joined = os.path.normpath(os.path.join(base, spec)).replace("\\", "/")
-        candidates.append(joined)
+        if "/" in spec or spec.startswith("./") or spec.startswith("../"):
+            # JS/TS path-style relative import: './util', '../foo/bar' — join verbatim.
+            joined = os.path.normpath(os.path.join(base, spec)).replace("\\", "/")
+            candidates.append(joined)
+        else:
+            # Python package-relative import: '.util', '..pkg.mod'. Leading dots are
+            # directory levels (1 = current package, 2 = parent, ...); the dotted tail
+            # is a module path. os.path.join(base, '.util') would wrongly yield a hidden
+            # file 'base/.util', so the edge was always dropped — split it out properly.
+            n_dots = len(spec) - len(spec.lstrip("."))
+            tail = spec[n_dots:].replace(".", "/")  # '.util'->'util', '..a.b'->'a/b'
+            up = base
+            for _ in range(n_dots - 1):  # first dot = current dir; each extra = one up
+                up = os.path.dirname(up)
+            joined = os.path.normpath(os.path.join(up, tail)).replace("\\", "/")
+            candidates.append(joined)
     elif spec.startswith("@/"):
         rest = spec[2:]
         candidates += [r + rest for r in alias_roots]
