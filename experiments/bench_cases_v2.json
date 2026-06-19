@@ -15,7 +15,7 @@
     {"id": "K12", "track": "knowledge", "lang": "en", "question": "anti-sludge closed vocabulary search before creating", "needle": "ADR-005"},
     {"id": "K13", "track": "knowledge", "lang": "en", "question": "visible dashboard analytics area product", "needle": "ADR-004"},
     {"id": "K14", "track": "knowledge", "lang": "en", "question": "no local embedding model", "needle": "ADR-003"},
-    {"id": "K15", "track": "knowledge", "lang": "en", "question": "jcodemunch not as the foundation", "needle": "ADR-002"},
+    {"id": "K15", "track": "knowledge", "lang": "en", "question": "a generic code indexer not as the foundation", "needle": "ADR-002"},
     {"id": "K16", "track": "knowledge", "lang": "en", "question": "stamp at write time instead of guessing at read time", "needle": "ADR-001"},
     {"id": "K17", "track": "knowledge", "lang": "en", "question": "file watcher sees new commits on its own", "needle": "watcher"},
     {"id": "K18", "track": "knowledge", "lang": "en", "question": "init idempotent avoid duplicating the code map", "needle": "idempotent"},
