@@ -29,6 +29,19 @@ we'll always say so plainly.
   files for your compiler, your team and git. The same move as search-inversion, one
   layer deeper. The deepest change, taken only when the ground under it is solid.
 
+## v1.0.3 — your notes keep their own identity
+
+A fix and a small feature, both about one thing: **a note is its own note.**
+
+- **Fixed — two different notes on the same file no longer merge into one.** When you
+  stamped a second decision onto a file that already had one, recall could fold it into
+  the first and lose what you just wrote. Now a merge only happens for a real
+  re-statement (the same note, said again) — a new title is a new note, even on the same
+  file. Nothing you write gets quietly swallowed.
+- **New — `recall stamp --id <n>` edits exactly one note.** Like editing a task by its
+  id instead of its name: same name allowed across notes, the id is the identity. Fast,
+  unambiguous, no guessing which note you meant.
+
 ## v1.0.0 — whatever-recall is live 🎉
 
 This is the launch. **whatever-recall is now publicly available** — give your code a
