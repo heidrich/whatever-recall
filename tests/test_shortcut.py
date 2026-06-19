@@ -53,8 +53,13 @@ def test_darwin_spec_is_a_command_file():
     name, content = shortcut.launcher_spec(REPO, 7100, "/usr/bin/python3", platform="darwin")
     assert name == "recall-dashboard-my-repo.command"
     assert content.startswith("#!/bin/sh")
-    assert f'cd "{REPO}"' in content
-    assert 'exec "/usr/bin/python3" -m recall.cli dashboard --port 7100' in content
+    # bug-hunt #2 (2026-06-17): must route through `tray`, not `dashboard`, so the console
+    # fallback prints the DO-NOT-CLOSE banner (same protection as the Windows .bat).
+    assert "-m recall.cli tray --port 7100" in content
+    assert "recall.cli dashboard" not in content
+    # bug-hunt #M1: the space-containing path is shlex-quoted (single quotes), not bare.
+    import shlex
+    assert shlex.quote(str(REPO)) in content
 
 
 def test_linux_spec_is_a_desktop_entry():
@@ -63,7 +68,59 @@ def test_linux_spec_is_a_desktop_entry():
     assert "[Desktop Entry]" in content
     assert "Terminal=true" in content
     assert f"Path={REPO}" in content
-    assert "--repo" in content  # .desktop Exec has no cwd guarantee — repo is explicit
+    assert "-m recall.cli tray" in content  # #2: tray, not dashboard
+    assert "recall.cli dashboard" not in content
+
+
+def test_launcher_routes_through_tray_on_every_platform():
+    """bug-hunt #2: all three platforms must use `recall tray` (DO-NOT-CLOSE protection),
+    never `recall dashboard` which prints no banner."""
+    for plat, py in (("win32", "C:/py/python.exe"), ("darwin", "/usr/bin/python3"),
+                     ("linux", "/usr/bin/python3")):
+        _, content = shortcut.launcher_spec(Path("/tmp/repo") if plat != "win32"
+                                            else Path("C:/repo"), 7099, py, platform=plat)
+        assert "-m recall.cli tray" in content, f"{plat} launcher must use tray"
+        assert "recall.cli dashboard" not in content, f"{plat} launcher must NOT use dashboard"
+
+
+def test_posix_launcher_quotes_an_injection_path():
+    """bug-hunt #M1: a POSIX path with shell metacharacters must be shlex-quoted in every
+    SHELL-EXECUTED context, so a double-click can never break out into command execution.
+
+    The shell-executed context is platform-specific (M0, 2026-06-18):
+      • darwin → the whole `.command` file IS a `/bin/sh` script, so the entire body counts;
+      • linux  → only the `Exec=` line is handed to a shell (`sh -c …`). Per the freedesktop
+        Desktop Entry spec the `Path=` key is a literal chdir target and `Comment=`/`Name=`
+        are tooltips — none is shell-parsed, so a metacharacter there is an inert part of a
+        directory name, not an exec vector. We still require the DESCRIPTIVE fields to carry
+        the sanitized slug (never the raw path) as defence-in-depth.
+    """
+    import shlex
+    evil = Path('/tmp/a";touch /tmp/pwned;"b')
+    q = shlex.quote(str(evil))
+    for plat in ("darwin", "linux"):
+        _, content = shortcut.launcher_spec(evil, 7099, "/usr/bin/python3", platform=plat)
+        assert q in content, f"{plat} must shlex-quote the repo path in the exec context"
+        if plat == "darwin":
+            shell_text = content  # the whole file is the shell script
+        else:
+            shell_text = next(l for l in content.splitlines() if l.startswith("Exec="))
+            # descriptive (non-shell) fields must never embed the raw, unquoted path
+            for line in content.splitlines():
+                if line.startswith(("Comment=", "Name=")):
+                    assert "touch /tmp/pwned" not in line, \
+                        f"descriptive field must carry the sanitized slug, not the raw path: {line!r}"
+        assert "touch /tmp/pwned" not in shell_text.replace(q, ""), \
+            f"{plat}: the injection payload must be neutralized in the shell-executed text"
+
+
+def test_windows_launcher_refuses_quote_or_percent_path():
+    """bug-hunt #M1: cmd.exe can't safely escape \" or % — refuse rather than emit a
+    corruptible/injectable .bat."""
+    import pytest
+    for bad in (Path('C:/a"b/repo'), Path("C:/a%PATH%b/repo")):
+        with pytest.raises(ValueError):
+            shortcut.launcher_spec(bad, 7099, "C:/py/python.exe", platform="win32")
 
 
 def test_slug_strips_unsafe_characters():

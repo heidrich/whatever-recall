@@ -31,6 +31,11 @@ from typing import Any
 # the model is classifying "what is this dependency", not editing history).
 _REFINE_LABELS = ("depends_on", "implements", "guarded_by", "relates_to")
 
+# max output tokens per file classification — ONE constant feeds both the real call
+# (_classify_file) and the cost preview (estimate_refine_cost) so the previewed cost is a
+# true upper bound that can't drift from the send (ADR-008 cost-before-spend).
+_REFINE_OUTPUT_CAP = 600
+
 _SYSTEM = """\
 You classify ONE source file's dependencies. You are given the file's source and the list \
 of local modules it imports. For EACH import, pick the single best relation label:
@@ -132,6 +137,65 @@ def refine_edges(index, provider, *, file_byte_cap: int = 6000,
     return res
 
 
+@dataclass
+class RefineEstimate:
+    files: int = 0
+    edges: int = 0
+    input_tokens: int = 0
+    est_output_tokens: int = 0
+    est_cost_usd: float = 0.0
+    model: str = ""
+
+
+def estimate_refine_cost(index, provider, *, file_byte_cap: int = 6000) -> RefineEstimate:
+    """The ADR-008 mandatory preview for `recall refine` — builds each file's EXACT
+    classification prompt and measures it with provider.count_tokens (ZERO completion
+    calls; count_tokens never spends). One call per source file at _REFINE_OUTPUT_CAP
+    output tokens, priced via the provider's own rate (0.0 for local Ollama / the CLI
+    subscription). Mirrors power.estimate_tokens so refine has the same cost-before-spend
+    guarantee (bug-hunt MEDIUM, 2026-06-17 — refine spent real money per file with no
+    preview/--yes gate)."""
+    repo = Path(index._repo) if getattr(index, "_repo", None) else None
+    rows = index.db.execute(
+        """
+        SELECT e.id, ns.file_path AS src_file, nd.file_path AS dst_file
+          FROM edges e
+          JOIN nodes ns ON ns.id = e.src_node
+          JOIN nodes nd ON nd.id = e.dst_node
+         WHERE (e.kind = 'depends_on' OR e.refined_from = 'depends_on')
+           AND ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL
+        """
+    ).fetchall()
+    by_file: dict[str, list[str]] = {}
+    for _eid, src_file, dst_file in rows:
+        by_file.setdefault(src_file, []).append(dst_file)
+
+    total_input = 0
+    for src_file, targets in by_file.items():
+        source = ""
+        if repo is not None:
+            try:
+                source = (repo / src_file).read_text(encoding="utf-8", errors="replace")[:file_byte_cap]
+            except OSError:
+                source = ""
+        user = (f"FILE: {src_file}\n\nIMPORTS (classify each):\n"
+                + "\n".join(f"- {t}" for t in targets)
+                + (f"\n\nSOURCE:\n{source}" if source else ""))
+        total_input += provider.count_tokens(_SYSTEM) + provider.count_tokens(user)
+
+    est_output = len(by_file) * _REFINE_OUTPUT_CAP
+    # Use the provider's OWN rate (every LLMProvider sets cost_per_token: (0,0) for local
+    # Ollama / the CLI subscription, the Anthropic-tier rate for paid). We deliberately do
+    # NOT import the llm cost table here — refine.py is not the LLM seam, and the read-path
+    # seam guard (test_power_seam_guard) forbids importing the llm module outside power/llm.
+    rate = getattr(provider, "cost_per_token", (0.0, 0.0)) or (0.0, 0.0)
+    cost = total_input * rate[0] + est_output * rate[1]
+    return RefineEstimate(
+        files=len(by_file), edges=len(rows), input_tokens=total_input,
+        est_output_tokens=est_output, est_cost_usd=cost, model=provider.model,
+    )
+
+
 def unrefine(index) -> int:
     """Reset every refined edge back to its original kind — the reverse of refine_edges.
 
@@ -162,7 +226,7 @@ def _classify_file(provider, repo, src_file: str, targets: list[str],
             + "\n".join(f"- {t}" for t in targets)
             + (f"\n\nSOURCE:\n{source}" if source else ""))
     try:
-        resp = provider.complete(_SYSTEM, user, max_tokens=600)
+        resp = provider.complete(_SYSTEM, user, max_tokens=_REFINE_OUTPUT_CAP)
     except Exception:
         return None  # call failed (network/provider) — distinct from an empty reply
     return _parse_labels(resp.text, set(targets))

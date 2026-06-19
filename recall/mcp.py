@@ -32,15 +32,62 @@ _SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 # What an LLM should know about recall before its first call — sent once in the
 # initialize result. Kept short: clients prepend this to the model's context.
 _INSTRUCTIONS = (
-    "recall is this project's persistent memory: decisions, lessons, code map, "
-    "blast radius — written at commit time, queried offline with zero tokens. "
-    "Call `brief` with a file path BEFORE editing that file (why it is the way it "
-    "is, what breaks, open tasks). Call `recall` to ask where/why/what-breaks "
-    "questions. After a significant decision or lesson, `stamp` it so the next "
-    "session knows. `dashboard` opens the browsable wiki. If a tool says there is "
-    "no index, run `recall init .` in the project once. The same actions exist as "
-    "user slash commands (the server's prompts: /recall /brief /explain /dashboard)."
+    # Chain-first / negation-first (the adoption fix, 2026-06-17): an AI pattern-matches a
+    # verb list to its nearest training cluster {search, RAG} and confabulates the rest. So
+    # lead with what recall IS NOT, then the mental model, THEN the verbs.
+    "recall is NOT a search engine and NOT a token-saver (that's a side effect). It is "
+    "THIS project's write-time memory: it tells you WHY each file is the way it is, WHAT "
+    "BREAKS if you touch it, WHAT'S IN FLIGHT, and the REAL name to search for — written "
+    "at commit time, read back offline at 0 model tokens. grep finds code; recall tells you "
+    "the reasons grep can't see. Treat the project as a coworker with a memory you must "
+    "consult, not a pile of text to re-derive.\n\n"
+    "HOW YOU MUST USE IT (orient → locate → edit):\n"
+    "1. `explain` once at session start for the lay of the land (load-bearing files, "
+    "must-know decisions, what's in progress).\n"
+    "2. Before editing ANY file you MUST call `brief <file>` first — it returns the why, the "
+    "open tasks, and the blast radius at 0 tokens. Skipping it never saves tokens; it only "
+    "loses the context that stops you silently undoing a deliberate decision.\n"
+    "3. Before you grep a name you're GUESSING, call `resolve <guess>` — it maps your "
+    "invented term to what this repo actually calls it (the #1 reason a grep finds nothing).\n"
+    "4. Call `recall \"<question>\"` for where/why/what-breaks questions.\n"
+    "5. After a decision or lesson, `stamp` it so the memory compounds for the next session.\n\n"
+    "`dashboard` opens the browsable wiki. No index? run `recall init .` once. Same actions "
+    "exist as slash commands (/recall /brief /explain /resolve /dashboard). If you SPAWN "
+    "subagents, they can't see this MCP server (session-scoped) — have them call the recall "
+    "CLI instead: `recall brief <file> --terse` before each agent judges a file."
 )
+
+# Workstream E: appended ONLY when the commit-synced STATE block is actually present in an
+# agent-config file (otherwise the sentence would lie). The block is the always-present floor
+# regardless of A's per-prompt push gating — so this is true under A's gated default.
+_STATE_SENTENCE = (
+    "\n\nNOTE: this project's baseline orientation is ALREADY in your system prompt as the recall "
+    "STATE block (re-synced into the AI instruction file on every commit). These tools are the "
+    "on-demand FALLBACK — prefer the cached block, and keep tool calls few and terse."
+)
+
+
+def _sync_context_installed(repo) -> bool:
+    """True iff recall's STATE block markers are present in an agent-config file (so sync-context
+    is effectively installed) — only then is the 'baseline is in your system prompt' sentence TRUE."""
+    from recall.engine import Index
+    for rel in ("CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md", ".cursor/rules"):
+        try:
+            p = repo / rel
+            if p.exists() and Index.STATE_BEGIN in p.read_text(encoding="utf-8", errors="replace"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _instructions(session: "_Session") -> str:
+    try:
+        if _sync_context_installed(session.repo):
+            return _INSTRUCTIONS + _STATE_SENTENCE
+    except Exception:
+        pass
+    return _INSTRUCTIONS
 
 
 def _server_version() -> str:
@@ -100,7 +147,9 @@ def _tool_brief(s: _Session, a: dict) -> str:
         raise _NoIndex()
     from recall.cli import _format_brief_for_prompt
 
-    return _format_brief_for_prompt(idx.brief(a["file"]))
+    # terse=True: the MCP caller is a machine (Claude/Cursor), so compress the
+    # structural lists but keep the WHY verbatim — machine-first, fewer tokens.
+    return _format_brief_for_prompt(idx.brief(a["file"], consumer="mcp"), terse=True)
 
 
 def _tool_explain(s: _Session, a: dict) -> str:
@@ -109,24 +158,54 @@ def _tool_explain(s: _Session, a: dict) -> str:
         raise _NoIndex()
     from recall.cli import _format_explain_for_prompt
 
-    return _format_explain_for_prompt(idx.onboarding(), s.repo.name)
+    # terse=True: machine caller — tighter caps, drop the contested section, keep
+    # the decisions + open tasks that actually orient an AI's judgment.
+    return _format_explain_for_prompt(idx.onboarding(consumer="mcp"), s.repo.name, terse=True)
+
+
+def _tool_resolve(s: _Session, a: dict) -> str:
+    """Search-inversion (ADR-037): correct a hallucinated search term into this
+    repo's real vocabulary before the caller greps it."""
+    idx = s.index()
+    if idx is None:
+        raise _NoIndex()
+    from recall.cli import _format_resolve_for_prompt
+
+    return _format_resolve_for_prompt(idx.resolve(a["guess"], top=a.get("top", 5)))
+
+
+def _tool_push(s: _Session, a: dict) -> str:
+    """Workstream A — the situational push as a user-invoked PROMPT (read once, embedded
+    server-side — NOT a lingering tool): the scoped brief + landmines + live BROKEN trust-status
+    for the file and/or task the caller is on. With no args it degrades to the repo state block."""
+    idx = s.index()
+    if idx is None:
+        raise _NoIndex()
+    return idx.render_situational_block(focus_file=a.get("file"), task=a.get("task"))
 
 
 def _tool_stamp(s: _Session, a: dict) -> str:
     idx = s.index()
     if idx is None:
         raise _NoIndex()
-    r = idx.stamp(
-        title=a["title"],
-        body=a.get("body"),
-        anchors=a.get("anchors"),
-        tags=a.get("tags"),
-        file_path=a.get("file"),
-        origin="live",
-    )
+    try:
+        r = idx.stamp(
+            title=a["title"],
+            body=a.get("body"),
+            anchors=a.get("anchors"),
+            tags=a.get("tags"),
+            file_path=a.get("file"),
+            predicate=a.get("predicate"),
+            outcome=a.get("outcome"),
+            origin="live",
+            consumer="mcp",
+        )
+    except ValueError as e:  # unparseable predicate / bad path — surface, don't store it
+        return f"NOT stamped — {e}"
+    pred = f"  predicate set (re-checked free on every freshen)." if a.get("predicate") else ""
     if r["action"] == "MERGE":
-        return f"merged into existing note: {r['into']} (anchor overlap {r['overlap']})"
-    return f"stamped #{r['node_id']} ({r['anchors']} anchors) — the next session will know."
+        return f"merged into existing note: {r['into']} (anchor overlap {r['overlap']}).{pred}"
+    return f"stamped #{r['node_id']} ({r['anchors']} anchors) — the next session will know.{pred}"
 
 
 def _tool_contested(s: _Session, a: dict) -> str:
@@ -163,14 +242,24 @@ def _tool_freshen(s: _Session, a: dict) -> str:
 
 
 def _probe_dashboard(url: str) -> bool:
-    """Is a dashboard already answering at `url`? (separate fn so tests inject it)"""
+    """Is a dashboard already answering at `url`? (separate fn so tests inject it)
+
+    ANY HTTP response means a server is bound — including a 402 from a signed-out but
+    LIVE dashboard (/api/pulse is gated). Reading only `status == 200` mis-read that as
+    'not alive' and spawned a SECOND `recall dashboard --port 7099` that fails to bind
+    (then the tool lied 'opening in the browser'). This is the SAME 402-is-alive fix as
+    dashboard.is_dashboard_live — round 1 patched one of the two identical probes only.
+    (P2 bug-hunt round 2, 2026-06-15: incomplete-fix regression.)"""
+    import urllib.error
     from urllib.request import urlopen
 
     try:
         with urlopen(url + "/api/pulse", timeout=1.5) as r:
             return r.status == 200
+    except urllib.error.HTTPError:
+        return True  # a gated (402/403) response still proves a server is bound
     except Exception:
-        return False
+        return False  # connection refused / timeout — genuinely not alive
 
 
 def _tool_dashboard(s: _Session, a: dict, *, probe=_probe_dashboard) -> str:
@@ -191,6 +280,79 @@ def _tool_dashboard(s: _Session, a: dict, *, probe=_probe_dashboard) -> str:
     subprocess.Popen([sys.executable, "-m", "recall.cli", "dashboard", "--port", "7099"], **kw)
     return (f"Started the recall dashboard for {s.repo.name} — it is opening in the "
             f"browser; otherwise visit {url}")
+
+
+# --------------------------------------------- code intelligence (static-code-intel serves)
+# impact + precedent (arrow 3) and the file-granular code-intel serves, exposed to MCP clients
+# (Claude/Cursor) so a real user gets the navigation answers without shelling out. Subagent fleets
+# still use the CLI (MCP is session-scoped — they can't reach it), per the dogfood lesson.
+def _tool_impact(s: _Session, a: dict) -> str:
+    idx = s.index()
+    if idx is None:
+        raise _NoIndex()
+    from recall.cli import _format_impact_for_prompt
+    return _format_impact_for_prompt(
+        idx.impact(a["target"], depth=int(a.get("depth", 2)), consumer="mcp"))
+
+
+def _tool_precedent(s: _Session, a: dict) -> str:
+    idx = s.index()
+    if idx is None:
+        raise _NoIndex()
+    from recall.cli import _format_precedent_for_prompt
+    return _format_precedent_for_prompt(
+        idx.precedent(a["situation"], limit=int(a.get("limit", 5)), consumer="mcp"))
+
+
+def _tool_callers(s: _Session, a: dict) -> str:
+    idx = s.index()
+    if idx is None:
+        raise _NoIndex()
+    from recall.cli import _format_hierarchy_for_prompt
+    fn = idx.callees if a.get("callees") else idx.callers
+    return _format_hierarchy_for_prompt(
+        fn(a["target"], depth=int(a.get("depth", 2)), consumer="mcp"))
+
+
+# Workstream E: the listing serves are terse-by-default + pointer-first — a digest of the top
+# rows on the MCP surface (no lingering 50-row tax), with the full list one read-once CLI call away.
+_MCP_DIGEST = 12
+
+
+def _pointer(text: str, cli_cmd: str) -> str:
+    return f"{text}\n\nfull list: run `{cli_cmd}` (CLI, read-once, no MCP residue)."
+
+
+def _tool_dead_code(s: _Session, a: dict) -> str:
+    idx = s.index()
+    if idx is None:
+        raise _NoIndex()
+    from recall.cli import _format_listing_for_prompt
+    text = _format_listing_for_prompt(
+        idx.dead_code(limit=int(a.get("limit", _MCP_DIGEST)), consumer="mcp"),
+        "dead-code", "candidates",
+        "code files nothing imports (candidates — verify; dynamic imports invisible)")
+    return _pointer(text, "recall dead-code --limit 50")
+
+
+def _tool_untested(s: _Session, a: dict) -> str:
+    idx = s.index()
+    if idx is None:
+        raise _NoIndex()
+    from recall.cli import _format_listing_for_prompt
+    text = _format_listing_for_prompt(
+        idx.untested(limit=int(a.get("limit", _MCP_DIGEST)), consumer="mcp"),
+        "untested", "untested", "code files with no recorded test edge (file-granular)")
+    return _pointer(text, "recall untested --limit 50")
+
+
+def _tool_cycles(s: _Session, a: dict) -> str:
+    idx = s.index()
+    if idx is None:
+        raise _NoIndex()
+    from recall.cli import _format_cycles_for_prompt
+    text = _format_cycles_for_prompt(idx.cycles(limit=int(a.get("limit", _MCP_DIGEST)), consumer="mcp"))
+    return _pointer(text, "recall cycles --limit 50")
 
 
 class _NoIndex(Exception):
@@ -248,12 +410,35 @@ _TOOLS: list[dict[str, Any]] = [
         "handler": _tool_explain,
     },
     {
+        "name": "resolve",
+        "title": "Correct a search term into this repo's real vocabulary",
+        "description": (
+            "Search-inversion: BEFORE you grep a name you're guessing, call this — it "
+            "maps the hallucinated term to what THIS repo actually calls it (e.g. "
+            "'seatLimit' -> 'confirmSeatOrRollback'). Corrects the vocabulary mismatch "
+            "from the repo's lived experience, so you don't burn a round grepping a "
+            "term that doesn't exist here."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "guess": {**_STR, "description": "the term you're guessing (e.g. seatLimit)"},
+            },
+            "required": ["guess"],
+        },
+        "handler": _tool_resolve,
+    },
+    {
         "name": "stamp",
         "title": "Write knowledge into the project memory",
         "description": (
             "Record a decision, lesson or gotcha so every future session knows it. "
             "Use after fixing a tricky bug or making a deliberate choice. Anchors "
-            "are the search terms it should be found by."
+            "are the search terms it should be found by. OPTIONAL predicate: a "
+            "re-runnable CHECK that lets recall re-verify your claim free on every "
+            "commit — it catches a 'why' that was wrong from the start (which SHA "
+            "drift can never see). Pass it when the claim is about CODE that is "
+            "checkable (e.g. 'always lowercases' -> contains:\\.lower\\(\\))."
         ),
         "inputSchema": {
             "type": "object",
@@ -265,6 +450,14 @@ _TOOLS: list[dict[str, Any]] = [
                 "tags": {"type": "array", "items": _STR,
                          "description": "optional facets, e.g. security, performance, bugfix"},
                 "file": {**_STR, "description": "optional: file this knowledge is pinned to"},
+                "predicate": {**_STR, "description":
+                    "optional re-runnable check: 'contains:<regex>' / 'absent:<regex>' "
+                    "clauses joined by ' && '. HOLDS = claim still true. Checked against "
+                    "the pinned file's text on every freshen() — flags 🔴 BROKEN when it fails."},
+                "outcome": {**_STR, "description":
+                    "optional: what CAME of this decision — what was learned, or how it turned "
+                    "out. The END of the causal chain, kept DISTINCT from the title (which is "
+                    "the decision itself). Omit it honestly if nothing came of it yet."},
             },
             "required": ["title"],
         },
@@ -306,6 +499,103 @@ _TOOLS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}},
         "handler": _tool_dashboard,
     },
+    {
+        "name": "impact",
+        "title": "What's affected if you change this",
+        "description": (
+            "'If I touch this file/symbol, what actually breaks?' — fuses empirical "
+            "co-change (what git history proves moves together) with structural "
+            "dependents, ranked by importance. The 0-token read-time call-hierarchy "
+            "replacement. Call before a risky edit."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {**_STR, "description": "a file (a/b.py) or a symbol name"},
+                "depth": {"type": "integer", "description": "structural hops to walk (default 2)"},
+            },
+            "required": ["target"],
+        },
+        "handler": _tool_impact,
+    },
+    {
+        "name": "precedent",
+        "title": "Have we been here before?",
+        "description": (
+            "Given a situation you're about to act in ('switching auth to JWT', "
+            "'adding a money path'), serve the most ANALOGOUS past decisions/lessons, "
+            "each with how it turned out (superseded? became a landmine? drifted?). "
+            "Generalize from THIS repo's lived experience, not your priors."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "situation": {**_STR, "description": "what you're about to do"},
+                "limit": {"type": "integer", "description": "max precedents (default 5)"},
+            },
+            "required": ["situation"],
+        },
+        "handler": _tool_precedent,
+    },
+    {
+        "name": "callers",
+        "title": "Who depends on this (call-hierarchy)",
+        "description": (
+            "The file-granular call-hierarchy: every file that depends on (imports/uses) "
+            "the target, transitively, by hop. Set callees=true to invert (what the "
+            "target depends on). File-granular by design — recall builds no per-call-site edges."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {**_STR, "description": "a file or a symbol name"},
+                "callees": {"type": "boolean", "description": "invert: what THIS depends on"},
+                "depth": {"type": "integer", "description": "hops to walk (default 2)"},
+            },
+            "required": ["target"],
+        },
+        "handler": _tool_callers,
+    },
+    {
+        "name": "dead_code",
+        "title": "Dead-code candidates",
+        "description": (
+            "Code files that exist on disk but nothing in the recorded graph imports — "
+            "dead-code CANDIDATES. Conservative: excludes tests, entry/framework files, "
+            "docs. File-granular can't see dynamic imports, so verify before deleting."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "max candidates (default 50)"}},
+        },
+        "handler": _tool_dead_code,
+    },
+    {
+        "name": "untested",
+        "title": "Untested code files",
+        "description": (
+            "Code files with NO recorded test edge — nothing in tests/ depends on or "
+            "co-changed with them. File-granular 'what has no test?'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "max files (default 50)"}},
+        },
+        "handler": _tool_untested,
+    },
+    {
+        "name": "cycles",
+        "title": "Dependency cycles",
+        "description": (
+            "File→file import cycles in the depends_on graph (A imports B imports ... A). "
+            "Each distinct cycle reported once."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "description": "max cycles (default 50)"}},
+        },
+        "handler": _tool_cycles,
+    },
 ]
 
 
@@ -339,11 +629,29 @@ _PROMPTS: list[dict[str, Any]] = [
         "handler": _tool_explain,
     },
     {
+        "name": "resolve",
+        "title": "Correct a search term into this repo's vocabulary",
+        "description": "Search-inversion: map a guessed name to what this repo actually calls it.",
+        "arguments": [{"name": "guess", "description": "the term you're guessing",
+                       "required": True}],
+        "handler": _tool_resolve,
+    },
+    {
         "name": "dashboard",
         "title": "Open the recall dashboard",
         "description": "Start (or find) the local dashboard and get its URL.",
         "arguments": [],
         "handler": _tool_dashboard,
+    },
+    {
+        "name": "push",
+        "title": "Situational memory for what you're doing now",
+        "description": "Scoped brief + landmines + live BROKEN trust-status for a file and/or task — read once, no lingering tool.",
+        "arguments": [{"name": "file", "description": "repo-relative file you're about to edit",
+                       "required": False},
+                      {"name": "task", "description": "what you're trying to do",
+                       "required": False}],
+        "handler": _tool_push,
     },
 ]
 
@@ -446,6 +754,41 @@ def _text_result(msg_id: Any, text: str, *, is_error: bool = False) -> dict:
     return _ok(msg_id, {"content": [{"type": "text", "text": text}], "isError": is_error})
 
 
+_NOT_SIGNED_IN = (
+    "You're not signed in to whatever-recall, so recall can't run.\n\n"
+    "To sign in: open a terminal and run  `recall login`  (it opens your browser; "
+    "no key to copy). After you authorize the device, recall works here again.\n\n"
+    "recall confirms your seat with a brief online check about once an hour, so once "
+    "you're signed in this rarely interrupts you."
+)
+
+
+def _licensed() -> bool:
+    """W2 (D7): is there a verified, in-window, non-pending license? MCP can't open
+    a browser inside the stdio loop, so when unlicensed we return a clear, machine-
+    readable instruction (NOT a silent error) — the user runs `recall login` once."""
+    try:
+        from recall import license as L
+        state = L.load_license()
+        return bool(state) and state.get("verified") and not state.get("expired") and not state.get("pending")
+    except Exception:
+        return False
+
+
+def _served(session: "_Session", kind: str, msg_id, text: str, *, is_error: bool = False,
+            consumer: str = "mcp") -> dict:
+    """Workstream E choke point: record the EMITTED response SIZE once per call (best-effort,
+    never breaks the call), then return the tools/call result. Covers success AND isError results
+    — exactly one resp_chars row per MCP call, the context tax measured at the boundary."""
+    idx = session.index()
+    if idx is not None:
+        try:
+            idx._record_served(kind, consumer, len(text or ""))
+        except Exception:
+            pass
+    return _text_result(msg_id, text, is_error=is_error)
+
+
 def handle(msg: dict, session: _Session) -> dict | None:
     """One JSON-RPC message in, one response dict out (None for notifications).
 
@@ -477,7 +820,7 @@ def handle(msg: dict, session: _Session) -> dict | None:
             "capabilities": {"tools": {}, "prompts": {}},
             "serverInfo": {"name": "recall", "title": "whatever-recall",
                            "version": _server_version()},
-            "instructions": _INSTRUCTIONS,
+            "instructions": _instructions(session),
         })
 
     if method == "ping":
@@ -494,17 +837,21 @@ def handle(msg: dict, session: _Session) -> dict | None:
         tool = next((t for t in _TOOLS if t["name"] == name), None)
         if tool is None:
             return _err(msg_id, -32602, f"Unknown tool: {name}")
-        args = params.get("arguments") or {}
+        if not _licensed():  # W2/D7: clear "sign in" answer, never a silent failure
+            return _text_result(msg_id, _NOT_SIGNED_IN, is_error=True)
+        args = params.get("arguments")
+        if not isinstance(args, dict):  # a truthy non-object (5, true, "x", []) is NOT {}
+            args = {}                    # `or {}` left it through -> `r not in 5` raised
         missing = [r for r in tool["inputSchema"].get("required", []) if r not in args]
         if missing:
             return _err(msg_id, -32602, f"Missing required argument(s): {', '.join(missing)}")
         try:
-            return _text_result(msg_id, tool["handler"](session, args))
+            return _served(session, name, msg_id, tool["handler"](session, args))
         except _NoIndex:
-            return _text_result(msg_id, _NO_INDEX.format(repo=session.repo), is_error=True)
+            return _served(session, name, msg_id, _NO_INDEX.format(repo=session.repo), is_error=True)
         except Exception as e:  # execution error -> isError result, never a crash
             traceback.print_exc(file=sys.stderr)
-            return _text_result(msg_id, f"{type(e).__name__}: {e}", is_error=True)
+            return _served(session, name, msg_id, f"{type(e).__name__}: {e}", is_error=True)
 
     if method == "prompts/list":
         return _ok(msg_id, {"prompts": [
@@ -517,18 +864,38 @@ def handle(msg: dict, session: _Session) -> dict | None:
         prompt = next((p for p in _PROMPTS if p["name"] == name), None)
         if prompt is None:
             return _err(msg_id, -32602, f"Unknown prompt: {name}")
-        args = params.get("arguments") or {}
-        missing = [a["name"] for a in prompt["arguments"]
-                   if a.get("required") and a["name"] not in args]
-        if missing:
-            return _err(msg_id, -32602, f"Missing required argument(s): {', '.join(missing)}")
-        try:
-            text = prompt["handler"](session, args)
-        except _NoIndex:
-            text = _NO_INDEX.format(repo=session.repo)
-        except Exception as e:  # surface as content — a slash command must never crash
-            traceback.print_exc(file=sys.stderr)
-            text = f"{type(e).__name__}: {e}"
+        # The unlicensed answer must be a GetPromptResult ({description, messages}),
+        # NOT a CallToolResult ({content, isError}) — bug-hunt MEDIUM, 2026-06-17.
+        # _text_result emits the tools/call shape; a spec-compliant client parsing a
+        # prompts/get response looks for result.messages, finds it absent, and renders
+        # nothing — so the whole point of _NOT_SIGNED_IN ("a clear sign-in answer, never
+        # a silent failure") was defeated for slash commands. Surface the same text
+        # through the success shape below by treating "signed out" as the message body.
+        signed_out = not _licensed()  # W2/D7
+        args = params.get("arguments")
+        if not isinstance(args, dict):  # same non-object guard as tools/call above
+            args = {}
+        if signed_out:
+            text = _NOT_SIGNED_IN
+        else:
+            missing = [a["name"] for a in prompt["arguments"]
+                       if a.get("required") and a["name"] not in args]
+            if missing:
+                return _err(msg_id, -32602, f"Missing required argument(s): {', '.join(missing)}")
+            try:
+                text = prompt["handler"](session, args)
+            except _NoIndex:
+                text = _NO_INDEX.format(repo=session.repo)
+            except Exception as e:  # surface as content — a slash command must never crash
+                traceback.print_exc(file=sys.stderr)
+                text = f"{type(e).__name__}: {e}"
+        # workstream E: record the emitted prompt size too (tagged 'mcp-prompt'), best-effort
+        idx = session.index()
+        if idx is not None:
+            try:
+                idx._record_served(name, "mcp-prompt", len(text or ""))
+            except Exception:
+                pass
         return _ok(msg_id, {
             "description": prompt["description"],
             "messages": [{"role": "user", "content": {"type": "text", "text": text}}],
@@ -543,7 +910,12 @@ def serve(repo: str | Path | None = None) -> int:
     """Run the stdio server until the client closes stdin (the MCP shutdown)."""
     # Windows defaults text streams to the locale codepage — the spec demands UTF-8.
     # newline="\n" keeps the framing exact (no \r\n).
-    sys.stdin.reconfigure(encoding="utf-8")
+    # errors="replace": a single invalid UTF-8 byte on the wire (corrupted/binary pipe)
+    # must NOT raise UnicodeDecodeError — that decode happens in `for line in sys.stdin`
+    # BEFORE the per-line try, so a strict codec would kill the whole stdio loop and drop
+    # the MCP connection in Claude/Cursor. Replace the bad byte; the line then JSON-fails
+    # cleanly into a -32700 Parse error. (P1 bug-hunt 2026-06-15.)
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     session = _Session(repo)
     print(f"recall mcp · serving {session.repo} (stdio)", file=sys.stderr, flush=True)

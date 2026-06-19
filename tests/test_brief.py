@@ -150,3 +150,44 @@ def test_brief_is_model_free_and_fast():
     t0 = time.perf_counter()
     idx.brief("src/shell.tsx")
     assert (time.perf_counter() - t0) * 1000 < 50  # generous CI ceiling
+
+
+def test_stamp_anchor_path_pins_file_path():
+    """Dogfood fix 2026-06-14: `stamp --anchors <known-path>` (no explicit --file)
+    must PIN the note's file_path to that file, so brief(<path>) surfaces it. The
+    anchor must match a file recall already indexes (a stray phrase like 'see foo'
+    never pins). Before the fix the note floated with file_path=NULL, invisible to brief."""
+    idx = Index.open(":memory:")
+    _portal(idx)  # seeds src/shell.tsx as a known file
+    r = idx.stamp(title="Shell mounts the guard ON PURPOSE — do not 'simplify' it away",
+                  anchors=["src/shell.tsx"], kind="lesson", dedup=False)
+    row = idx.db.execute("SELECT file_path FROM nodes WHERE id=?", (r["node_id"],)).fetchone()
+    assert (row[0] or "").replace("\\", "/") == "src/shell.tsx", "path-like anchor did not pin file_path"
+
+
+def test_stamp_anchor_unknown_path_does_not_pin():
+    """A path-shaped anchor that is NOT a known file must NOT pin file_path — only
+    real indexed files anchor a note, so a 'see config/old.yml' phrase can't hijack."""
+    idx = Index.open(":memory:")
+    _portal(idx)
+    r = idx.stamp(title="random note mentioning some/unknown/path.ts",
+                  anchors=["some/unknown/path.ts"], kind="lesson", dedup=False)
+    row = idx.db.execute("SELECT file_path FROM nodes WHERE id=?", (r["node_id"],)).fetchone()
+    assert row[0] is None, "an unknown path-anchor must not pin file_path"
+
+
+def test_brief_surfaces_a_note_anchored_by_path_even_without_file_path():
+    """Dogfood fix B 2026-06-14: brief collects WHY via file_path OR an anchor that
+    is the file's path-term — so a note attached with `stamp --anchors <path>` shows
+    up even on an older 'floating' note whose file_path was never set."""
+    idx = Index.open(":memory:")
+    _portal(idx)
+    # force a floating note: anchored to the path term, but file_path explicitly NULL
+    idx.stamp(title="The guard runs ONCE in the shell — a per-route guard is a regression",
+              anchors=["src/shell.tsx"], kind="lesson", file_path=None, dedup=False)
+    # simulate the pre-fix state: blank its file_path so only the anchor connects it
+    idx.db.execute("UPDATE nodes SET file_path=NULL WHERE title LIKE 'The guard runs ONCE%'")
+    idx.db.commit()
+    b = idx.brief("src/shell.tsx")
+    titles = [w["title"] for w in b["why"]]
+    assert any("runs ONCE in the shell" in t for t in titles), "brief did not surface the anchor-only note"

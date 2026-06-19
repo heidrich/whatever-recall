@@ -212,13 +212,29 @@ def _extract_json_object(text: str) -> dict | None:
                 return obj
         except (json.JSONDecodeError, TypeError):
             pass
-    # 3) first balanced {...} span
+    # 3) first balanced {...} span. Brace-count must IGNORE braces inside string
+    #    literals — a value like "use the {x} pattern" otherwise unbalances the depth,
+    #    the span ends at the wrong byte, json.loads fails, and the model's VALID output
+    #    is silently discarded (responses_discarded). Track quote+escape state. (P2
+    #    bug-hunt 2026-06-15.)
     start = s.find("{")
     if start != -1:
         depth = 0
+        in_str = False
+        esc = False
         for i in range(start, len(s)):
             c = s[i]
-            if c == "{":
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "{":
                 depth += 1
             elif c == "}":
                 depth -= 1

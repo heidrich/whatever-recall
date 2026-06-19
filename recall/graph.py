@@ -24,6 +24,12 @@ _RESOLVE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java",
                  ".rb", ".php", ".c", ".cpp", ".cs")
 # index files an import of a directory resolves to (import './foo' -> ./foo/index.ts).
 _INDEX_BASENAMES = ("index", "__init__", "mod")
+# genuine NON-source asset extensions — a dotted spec ending in one of these is an
+# asset import, not a `import a.b.c` python module. We must NOT reuse _RESOLVE_EXTS for
+# this gate: it contains source extensions ('.c','.rs','.ts',…) that collide with real
+# final module segments (`import pkg.c`). (bug-hunt round 3, 2026-06-15.)
+_NONSOURCE_EXTS = (".css", ".scss", ".sass", ".less", ".json", ".svg", ".png", ".jpg",
+                   ".jpeg", ".gif", ".webp", ".md", ".txt", ".yaml", ".yml", ".toml")
 
 
 def import_paths(root_node, src: bytes, lang: str) -> list[str]:
@@ -46,7 +52,18 @@ def _text(node, src: bytes) -> str:
 
 
 def _collect_ts_imports(node, src: bytes, out: list[str]) -> None:
+    # `import ... from "x"` always carries a module path. A re-export
+    # (`export {X} from "./a"`, `export * from "./b"`) does too — the barrel/index.ts
+    # pattern — and is an `export_statement` node. BUT `export default "./theme";` also
+    # has a `string` child that is the exported VALUE, not a module path; harvesting it
+    # produced a FALSE depends_on edge ("a wrong edge is worse than no edge"). So for an
+    # export_statement, only collect strings when it is a true re-export — i.e. it has a
+    # `from` keyword child. (Round-1 collected every export string — P2 regression, round 2.)
     if node.type == "import_statement":
+        for c in node.children:
+            if c.type == "string":
+                out.append(_text(c, src).strip("\"'`"))
+    elif node.type == "export_statement" and any(c.type == "from" for c in node.children):
         for c in node.children:
             if c.type == "string":
                 out.append(_text(c, src).strip("\"'`"))
@@ -67,7 +84,29 @@ def _collect_py_imports(node, src: bytes, out: list[str]) -> None:
     if node.type == "import_from_statement":
         mod = node.child_by_field_name("module_name")
         if mod is not None:
-            out.append(_text(mod, src))
+            spec = _text(mod, src)
+            # Bare-dot form `from . import foo` / `from .. import bar`: module_name is
+            # just dots (the PACKAGE), and the real sibling modules are the imported
+            # names. Appending '.' alone resolved to the package dir -> edge dropped.
+            # Emit '<dots>name' per imported name so resolution finds the sibling.
+            # `from .util import x` already names a module in module_name -> as-is.
+            # (P2 bug-hunt 2026-06-15.)
+            if spec and set(spec) == {"."}:
+                names = node.children_by_field_name("name")
+                if names:
+                    for nm in names:
+                        # `from . import a as x`: the name child is an `aliased_import`
+                        # whose verbatim text is 'a as x' -> spec '.a as x' resolves to a
+                        # nonexistent path and the edge is lost. Extract the inner name,
+                        # exactly as the import_statement branch below does. (Round-1 used
+                        # the raw text -> P2 regression on aliased imports, round 2.)
+                        inner = nm.child_by_field_name("name") if nm.type == "aliased_import" else nm
+                        if inner is not None:
+                            out.append(spec + _text(inner, src))
+                else:
+                    out.append(spec)
+            else:
+                out.append(spec)
     elif node.type == "import_statement":
         for c in node.children:
             if c.type in ("dotted_name", "aliased_import"):
@@ -113,8 +152,14 @@ def resolve_import(spec: str, from_rel: str, repo_files: set[str],
     elif spec.startswith("@/"):
         rest = spec[2:]
         candidates += [r + rest for r in alias_roots]
-    elif "/" not in spec and "." in spec and not spec.endswith(tuple(_RESOLVE_EXTS)):
-        # python dotted module: a.b.c -> a/b/c (also try under src/)
+    elif "/" not in spec and "." in spec and not spec.endswith(_NONSOURCE_EXTS):
+        # python dotted module: a.b.c -> a/b/c (also try under src/). The guard was
+        # `endswith(_RESOLVE_EXTS)` — which includes '.c'/'.rs'/'.go'/'.ts'/… — so
+        # `import mypkg.c` (final segment 'c') was wrongly treated as having a source
+        # suffix and skipped -> the real edge to mypkg/c.py was DROPPED. The membership
+        # check in _complete is the actual safety (an external like os.path resolves to
+        # None because os/path isn't in repo_files), so we only exclude genuine asset
+        # extensions here, not source-language ones. (P3 bug-hunt round 3, 2026-06-15.)
         dotted = spec.replace(".", "/")
         candidates += [dotted] + [r + dotted for r in alias_roots]
     else:

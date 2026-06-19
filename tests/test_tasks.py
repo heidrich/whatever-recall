@@ -47,7 +47,10 @@ def test_parse_subtasks_reads_checklist_and_done_state():
             "- [ ] **bold label** stays clean\n")
     subs = parse_subtasks(body)
     assert len(subs) == 4
-    assert subs[0] == {"text": "open one", "done": False, "state": "open"}
+    # each step carries its text/done/state + its body line number (added 2026-06-19
+    # so the dashboard can git-blame per-step authors)
+    assert subs[0]["text"] == "open one" and subs[0]["done"] is False and subs[0]["state"] == "open"
+    assert subs[0]["line"] == 2  # 1-based line in the body
     assert subs[1]["done"] is True
     assert subs[2]["done"] is True            # [X] and * bullet both work
     assert subs[3]["text"] == "bold label stays clean"  # markdown markers stripped

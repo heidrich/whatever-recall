@@ -26,6 +26,14 @@ def _seed_repo(tmp_path):
     return repo
 
 
+def _briefing_text(out: dict) -> str:
+    """The briefing the hook delivered, regardless of channel. The hard gate (2026-06-17)
+    DENIES the first unacked edit, so the briefing rides in permissionDecisionReason; an
+    acked edit gets it in additionalContext. Tests assert the CONTENT, not the channel."""
+    hso = out.get("hookSpecificOutput", {})
+    return hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
+
+
 def test_pre_edit_injects_for_known_file(tmp_path):
     from adapters import hook
 
@@ -38,8 +46,10 @@ def test_pre_edit_injects_for_known_file(tmp_path):
                        "new_string": "rls cutover workspace_id insert"},
     }
     out = hook.route(event)
-    assert out, "should inject context for a known file"
-    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert out, "should brief on a known file"
+    # the hard gate denies the first unacked edit and carries the briefing in the reason
+    assert out["hookSpecificOutput"].get("permissionDecision") == "deny"
+    ctx = _briefing_text(out)
     assert "workspace_id" in ctx.lower()
     assert "sha a1b2c3d" in ctx
 
@@ -71,7 +81,7 @@ def test_pre_edit_injects_briefing_tasks_and_blast(tmp_path):
              "tool_input": {"file_path": "src/core.ts", "new_string": "core run"}}
     out = hook.route(event)
     assert out, "should brief on a known file"
-    ctx = out["hookSpecificOutput"]["additionalContext"].lower()
+    ctx = _briefing_text(out).lower()
     assert "open task" in ctx and "core refactor" in ctx
     assert "depend on this" in ctx or "break" in ctx
     assert "caller.ts" in ctx

@@ -25,7 +25,7 @@ from pathlib import Path
 # dependency graph (PageRank over depends_on/co_changed edges). Write-time, model-free.
 # Lets recall split a code-track (ranked by importance) from a knowledge-track so a
 # commit never buries the central code symbol the query is really about.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 11  # v11: nodes.visibility — 'team' (shared/exported) vs 'private' (never leaves this machine/org)
 
 # The FTS tokenizer, named once so _SCHEMA and the v4 migration can't drift apart.
 _FTS_TOKENIZE = "porter unicode61"
@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     base_sha        TEXT,            -- repo HEAD the power run read against (audit + undo snapshot)
     author          TEXT,            -- WHO wrote this (git author name) — team overview + filter (v3)
     importance      REAL DEFAULT 0,  -- causal weight 0-10 (PageRank over the dep graph), v5/ADR-016
+    predicate       TEXT,            -- v8: re-runnable CHECK for this claim (contains:/absent:, predicate.py, arrow 1)
+    outcome         TEXT,            -- v9: what CAME of the decision (learned / bit us / nothing new) — chain end, NOT the title
+    visibility      TEXT DEFAULT 'team',  -- v11: 'team' travels with a shared/exported brain; 'private' never leaves this machine/org
     created_at      INTEGER DEFAULT (strftime('%s','now'))
 );
 
@@ -90,7 +93,11 @@ CREATE TABLE IF NOT EXISTS node_anchors (
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_anchors
     USING fts5(term, node_id UNINDEXED, tokenize='porter unicode61');
 
--- transparent statistics for the dashboard (ADR-004) — written on every recall.
+-- transparent statistics for the dashboard (ADR-004) — written on every read-path call.
+-- `kind` (v7) tags WHICH action wrote the row: recall / brief / explain / stamp. This is
+-- what the live activity console streams as a usage proof (the calls a user/AI made,
+-- across CLI + MCP + dashboard, all sharing this one DB). Default 'recall' keeps the two
+-- legacy recall() callers unchanged on an old index.
 CREATE TABLE IF NOT EXISTS access_log (
     ts         INTEGER DEFAULT (strftime('%s','now')),
     query      TEXT,
@@ -98,7 +105,9 @@ CREATE TABLE IF NOT EXISTS access_log (
     score      REAL,
     surfaced   INTEGER,
     latency_us INTEGER,
-    consumer   TEXT
+    consumer   TEXT,
+    kind       TEXT DEFAULT 'recall',
+    resp_chars INTEGER DEFAULT 0   -- v10: emitted response size (chars) per call — the context tax, measured
 );
 
 -- feedback (ADR-016, v5): deterministic 'was this hit useful?' signal. Incremented when
@@ -128,12 +137,14 @@ CREATE INDEX IF NOT EXISTS idx_na_node      ON node_anchors(node_id);
 # branch-replay lesson, applied to SQLite). A fresh DB already has them via _SCHEMA
 # above; _migrate only heals an older on-disk index.
 _MIGRATIONS: dict[str, list[str]] = {
-    "nodes": ["power_run", "base_sha", "author", "importance"],  # v2 + v3 + v5
+    "nodes": ["power_run", "base_sha", "author", "importance", "predicate", "outcome", "visibility"],  # v2/v3/v5/v8/v9/v11
     "edges": ["power_run", "base_sha", "refined_from"],          # + v6 refine reversibility
+    "access_log": ["kind", "resp_chars"],                        # v7 activity tag · v10 response size
 }
 _MIGRATION_COL_TYPE = {
     "power_run": "INTEGER", "base_sha": "TEXT", "author": "TEXT", "importance": "REAL DEFAULT 0",
-    "refined_from": "TEXT",
+    "refined_from": "TEXT", "kind": "TEXT DEFAULT 'recall'", "predicate": "TEXT", "outcome": "TEXT",
+    "resp_chars": "INTEGER DEFAULT 0", "visibility": "TEXT DEFAULT 'team'",
 }
 
 
@@ -149,20 +160,28 @@ def connect(path: str | Path = ":memory:") -> sqlite3.Connection:
 
     db = sqlite3.connect(str(path))
     db.row_factory = sqlite3.Row
-    db.execute("PRAGMA foreign_keys = ON")
-    if not is_memory:
-        # WAL: concurrent readers (the dashboard, the hook) never block the writer.
-        db.execute("PRAGMA journal_mode = WAL")
-        db.execute("PRAGMA synchronous = NORMAL")
-        # busy_timeout: a bulk writer (freshen() updates thousands of edges) must
-        # wait out a transient lock from a concurrent reader / WAL checkpoint
-        # instead of raising OperationalError('database is locked') immediately.
-        db.execute("PRAGMA busy_timeout = 5000")  # 5s
-
-    db.executescript(_SCHEMA)
-    _migrate(db)
-    _ensure_version(db)
-    db.commit()
+    # If the file is corrupt / not a sqlite db, the FIRST real access raises DatabaseError
+    # — and on a corrupt file that's `PRAGMA journal_mode=WAL` (measured), BEFORE the
+    # schema setup. Cover everything after connect() so the connection we just opened is
+    # closed before propagating, or it leaks (and on Windows the leaked handle blocks the
+    # caller's recovery unlink of the corrupt file). (P3 bug-hunt 2026-06-15.)
+    try:
+        db.execute("PRAGMA foreign_keys = ON")
+        if not is_memory:
+            # WAL: concurrent readers (the dashboard, the hook) never block the writer.
+            db.execute("PRAGMA journal_mode = WAL")
+            db.execute("PRAGMA synchronous = NORMAL")
+            # busy_timeout: a bulk writer (freshen() updates thousands of edges) must
+            # wait out a transient lock from a concurrent reader / WAL checkpoint
+            # instead of raising OperationalError('database is locked') immediately.
+            db.execute("PRAGMA busy_timeout = 5000")  # 5s
+        db.executescript(_SCHEMA)
+        _migrate(db)
+        _ensure_version(db)
+        db.commit()
+    except Exception:
+        db.close()
+        raise
     return db
 
 
@@ -179,14 +198,38 @@ def _migrate(db: sqlite3.Connection) -> None:
         have = {r[1] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
         for col in cols:
             if col not in have:
-                db.execute(
-                    f"ALTER TABLE {table} ADD COLUMN {col} {_MIGRATION_COL_TYPE[col]}"
-                )
+                try:
+                    db.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {col} {_MIGRATION_COL_TYPE[col]}"
+                    )
+                except sqlite3.OperationalError as e:
+                    # The PRAGMA check above is TOCTOU: two processes sharing one
+                    # .mind/index.db (the long-lived dashboard + a fresh CLI/hook) can
+                    # both see the column absent and both ALTER — the loser gets
+                    # "duplicate column name", which previously propagated out of open()
+                    # and crashed the second process. The column now exists either way,
+                    # so the migration goal is met: swallow ONLY that, re-raise the rest.
+                    # (P2 bug-hunt 2026-06-15.)
+                    if "duplicate column name" not in str(e).lower():
+                        raise
     # The power_run indexes live ONLY here, created after the columns are guaranteed to
     # exist (a fresh DB got them via _SCHEMA, an old DB just got them via the ALTERs
     # above). IF NOT EXISTS keeps it idempotent across re-opens.
     db.execute("CREATE INDEX IF NOT EXISTS idx_nodes_power ON nodes(power_run)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_edges_power ON edges(power_run)")
+    # file lookups go through REPLACE(file_path,'\','/') everywhere (brief/blast/drift/known)
+    # to normalize win32 backslashes; a plain index can't serve a function-wrapped column, so
+    # this EXPRESSION index matches that exact expression. Measured: brief's why_rows query
+    # 8.3ms -> 1.3ms (SCAN nodes -> COVERING INDEX), the biggest single term in brief()
+    # latency (perf pass 2026-06-18). Lives HERE, not in _SCHEMA, and is column-guarded:
+    # the FTS-migration tests build a synthetic pre-file_path nodes table, and an index that
+    # references a missing column would crash executescript (same class as the power_run note).
+    have_nodes = {r[1] for r in db.execute("PRAGMA table_info(nodes)").fetchall()}
+    if "file_path" in have_nodes:
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_nodes_filepath_norm "
+            "ON nodes(REPLACE(file_path, '\\', '/'))"
+        )
     _migrate_fts_tokenizer(db)
 
 

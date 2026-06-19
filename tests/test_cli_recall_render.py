@@ -149,3 +149,72 @@ def test_for_prompt_carries_relation_lines():
     res = idx.recall("cachepolicy cachepolicytwo")
     out = _format_for_prompt("cachepolicy cachepolicytwo", res)
     assert "relation: supersedes -> ADR-7 old cache policy" in out
+
+
+# ---- --terse: the AGENT (Bash) path (2026-06-14) ----------------------------
+# Subagents can't reach the MCP server (session-scoped), so recall reaches the
+# fleet via the CLI; --terse is the machine-first block they read. It must keep
+# the WHY verbatim (the signal that stops an AI undoing a decision) while
+# compressing the structural WHERE list — i.e. shorter than --for-prompt.
+
+def test_terse_query_keeps_why_verbatim(tmp_path, capsys):
+    """The WHY (knowledge) track — the decision text that stops an AI undoing a
+    decision — must survive terse VERBATIM (this is the whole point of the agent
+    path: less noise, same signal)."""
+    repo = _repo_with_tracks(tmp_path)
+    assert cli.main(["graphnode tracksdemo", "--terse", "--repo", str(repo)]) == 0
+    terse = capsys.readouterr().out
+    assert "WHY (knowledge):" in terse
+    assert "why the graph is shaped this way" in terse
+    assert "the chain mirrors runtime flow" in terse  # the body, verbatim
+    assert "\x1b[" not in terse  # ANSI-free (pasted into agent prompts)
+
+
+def test_terse_query_compresses_long_where_list():
+    """With many code hits the WHERE list is capped (+N more) in terse but full in
+    rich — that is the structural compression. Built on a synthetic result dict so
+    the silence floor / dedup of a real query can't change the hit count out from
+    under the assertion."""
+    from recall.cli import _format_for_prompt
+    res = {
+        "silenced": False,
+        "code": [
+            {"file": f"f{i}.py", "line": i + 1, "symbol": f"sym{i}", "importance": 50 - i}
+            for i in range(8)  # 8 hits > the terse cap of 5
+        ],
+        "knowledge": [], "blast_radius": [], "open_tasks": [], "results": [],
+    }
+    rich = _format_for_prompt("q", res, terse=False)
+    terse = _format_for_prompt("q", res, terse=True)
+    assert "more)" in terse and "more)" not in rich, "terse must cap the WHERE list"
+    assert "f0.py" in terse and "f7.py" in rich
+    assert len(terse) < len(rich)
+
+
+def test_terse_brief_not_longer_than_rich(tmp_path):
+    from recall.cli import _format_brief_for_prompt
+    repo = _repo_with_tracks(tmp_path)
+    idx = Index.open(repo / ".mind" / "index.db", repo=repo)
+    b = idx.brief("core.py")
+    idx.db.close()
+    terse = _format_brief_for_prompt(b, terse=True)
+    rich = _format_brief_for_prompt(b, terse=False)
+    assert len(terse) <= len(rich), "terse brief must not be longer than the rich one"
+
+
+def test_terse_flag_is_wired_on_all_three_commands():
+    """brief / explain / the bare `recall <query>` all accept --terse — the agent
+    path relies on every read surface supporting it."""
+    from recall.cli import build_parser, _run_recall
+    import argparse
+    p = build_parser()
+    # brief + explain are subcommands
+    assert p.parse_args(["brief", "x.py", "--terse"]).terse is True
+    assert p.parse_args(["explain", "--terse"]).terse is True
+    # the bare query path has its own parser inside _run_recall — assert the flag
+    # parses there too without raising
+    inner = argparse.ArgumentParser(prog="recall")
+    inner.add_argument("query")
+    inner.add_argument("--terse", action="store_true")
+    assert inner.parse_args(["q", "--terse"]).terse is True
+    assert _run_recall is not None

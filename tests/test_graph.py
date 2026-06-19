@@ -9,13 +9,20 @@ import pytest
 
 from recall.graph import resolve_import, dependency_edges, import_paths
 
-try:
-    from tree_sitter_language_pack import get_parser
-    _HAS_TS = True
-except Exception:  # pragma: no cover
-    _HAS_TS = False
+# Build a tree-sitter parser the SAME way production does (recall.bootstrap.
+# _load_tree_sitter), NOT via language_pack.get_parser: on tree-sitter 0.25.x
+# get_parser's Parser.parse rejects bytes and Tree.root_node is a zero-arg method,
+# while the whole graph pipeline slices raw `src` bytes by node byte-offsets. The
+# production path accepts bytes across 0.21→0.25+, so these tests exercise the exact
+# codemap parser and can't skew from it. (graph test fix 2026-06-15)
+from recall.bootstrap import _load_tree_sitter
 
-needs_ts = pytest.mark.skipif(not _HAS_TS, reason="tree-sitter not installed")
+_parser_for = _load_tree_sitter()
+needs_ts = pytest.mark.skipif(_parser_for is None, reason="tree-sitter not installed")
+
+
+def _ts_parse(lang: str, src: bytes):
+    return _parser_for(lang).parse(src)
 
 
 # ----------------------------------------------------------------- resolution
@@ -83,7 +90,7 @@ def test_extracts_ts_imports():
     src = (b'import { foo } from "./util";\n'
            b'import Default from "@/c/Thing";\n'
            b'import "./side.css";\n')
-    tree = get_parser("tsx").parse(src)
+    tree = _ts_parse("tsx", src)
     paths = import_paths(tree.root_node, src, "tsx")
     assert "./util" in paths and "@/c/Thing" in paths and "./side.css" in paths
 
@@ -91,7 +98,7 @@ def test_extracts_ts_imports():
 @needs_ts
 def test_extracts_python_imports():
     src = b"from pkg.sub import thing\nimport os.path\n"
-    tree = get_parser("python").parse(src)
+    tree = _ts_parse("python", src)
     paths = import_paths(tree.root_node, src, "python")
     assert any("pkg.sub" in p for p in paths)
 
@@ -99,6 +106,6 @@ def test_extracts_python_imports():
 @needs_ts
 def test_extracts_dynamic_import_and_require():
     src = b'const x = await import("./lazy");\nconst y = require("./cjs");\n'
-    tree = get_parser("tsx").parse(src)
+    tree = _ts_parse("tsx", src)
     paths = import_paths(tree.root_node, src, "tsx")
     assert "./lazy" in paths and "./cjs" in paths

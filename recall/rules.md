@@ -8,6 +8,11 @@ silence_floor: 2
 dedup_threshold: 0.45
 context_multiplier: 1.5
 
+# Pre-commit predicate nudge (Arrow 1, ADR-039): when a staged file recall has a why for
+# carries no re-check yet, print a model-free `contains:<anchor>` suggestion. Warn-only,
+# never blocks the commit. Set false to silence it.
+predicate_nudge: true
+
 # Facet weights — security lessons fire louder, chrome quieter (engine_proto2).
 facet_weights:
   security: 2.0
@@ -44,7 +49,7 @@ context_boost:
 stay_silent_on: [chore]
 
 # When the hook is allowed to speak at all.
-surface_on: [edit, task_start, commit]
+surface_on: [edit, task_start, commit, prompt, session_start]
 
 # The closed vocabulary for typed edges.
 edge_kinds: [implements, decided_by, supersedes, guarded_by, warns_about, recurs_with, presents, relates_to, depends_on, co_changed]
@@ -83,6 +88,70 @@ tabus only ever accumulate — a later layer can never weaken a safety rule.
 - **stay_silent_on** — facets that are never surfaced unprompted.
 - **edge_kinds** — the typed relations a stamp may declare.
 
+## THE GATE — do this before you touch code (ADR-017, ADR-032)
+
+> **Before editing ANY code file, run `recall brief <file>` first. No exceptions.**
+> This is a hard gate, not a step in a list. The briefing is read-only and costs
+> **0 model tokens** — skipping it never saves tokens, it only loses the open tasks,
+> the *why*, and the blast radius that keep you from breaking something on purpose.
+>
+> **ENFORCED, not suggested (2026-06-17):** when the dev installs the recall PreToolUse
+> hook, an edit to any file recall has knowledge about is **DENIED** until you run
+> `recall ack <file>` (after reading the briefing). recall is in the edit path, not
+> beside it — so a deliberate decision can't be silently undone even by an agent that
+> would otherwise skim past the context. (The ack is per-file, time-boxed; a new stamp
+> on the file re-gates it.)
+
+**recall and grep/read are not alternatives — they run in order:**
+
+1. **Orient** — `recall brief <file>` (or `recall "<question>"`): *what do I need to know
+   before I touch this?* — open tasks, why it's like this, what breaks, what it depends on.
+   This is the step grep/read **cannot** do; it is where recall earns its place.
+2. **Locate** — `grep`/`Read`: the exact string, the full file, the precise line. recall is
+   semantic and may miss a literal; for an exact match or a whole-file read, grep/Read win.
+   **Before you grep a name you're GUESSING** (a function/symbol you think exists but haven't
+   confirmed), run `recall resolve <guess>` first (ADR-037, search-inversion): it maps the term
+   you'd type to what THIS repo actually calls it (`seatLimit` → `confirmSeatOrRollback`), so you
+   don't burn a grep round on a name that doesn't exist here. It re-ranks and annotates but never
+   hides a match (grep stays the complete recall), and gets sharper as the repo is worked in.
+3. **Edit** — now, with both the *why* and the *where* in hand.
+
+So: never reach for grep "instead of" recall — reach for recall **first** (orient), then grep
+(locate), then edit. The only time you skip step 1 is a non-code mechanical lookup (a literal
+string, a config value, live DB/deploy state) where there is nothing to orient on.
+
+## THE AGENT RULE — subagents reach recall via the CLI, not MCP
+
+If you **spawn subagents** (a Task/agent tool, a review fleet, an audit workflow), each one
+starts BLANK — it does not inherit your session's memory or MCP connection. **MCP servers are
+session-scoped, so a spawned subagent CANNOT see the recall MCP tools** (measured 2026-06-14).
+The reliable transport for an agent is therefore the **recall CLI via the shell**:
+
+```sh
+recall brief <file> --terse      # the machine-first pre-edit briefing
+recall "<concept>" --terse       # locate code by concept
+recall explain --terse           # cold-start orientation
+```
+
+`--terse` keeps the WHY verbatim and only compresses the structural lists — the right shape for
+an agent prompt. **Every finder/reviewer/auditor agent you spawn must run `recall brief <file>
+--terse` on a file before it judges that file.** It is the same gate as above, pushed down to
+the fleet: a blank agent re-derives intent from code alone and raises false alarms about
+decisions that were made on purpose (measured: a recall-less agent raised ~4–5 false alarms a
+recall-first agent didn't, while the recall-first one also found a real bug the other missed).
+On Windows the CLI needs `PYTHONIOENCODING=utf-8`. MCP stays the path for the main interactive
+session and real users in Claude/Cursor.
+
+## THE 6 DIMENSIONS — the review raster after every feature, before every push
+
+After **every** feature and before **every** push, walk the six audit dimensions in
+`docs/audit-dimensions.md` (the canonical, single-source list): **Auth-Guard · Audit-Log ·
+Zod/Validation · Error-Handling (`res.ok`) · State-Updater · No-Client-Secrets/Cleanup**, plus
+the standing security lenses (business-logic/race/money, injection/takeover). A finding in any
+dimension is a blocker, not a TODO. Run it recall-first and verify findings adversarially before
+treating them as confirmed (3 skeptics, majority-real survives — most raised findings are false
+alarms). Don't fork the list — link to `docs/audit-dimensions.md`.
+
 ## MUST-CHECK — non-negotiable for any AI working in this repo (ADR-017)
 
 These are **hard obligations, not suggestions.** They are what makes recall worth far more
@@ -116,19 +185,29 @@ On a fresh session, before substantive work:
 3. **Start the local dashboard** (`recall dashboard`) so the user can SEE the living wiki
    and you can use the graph. It is the window onto everything recall knows.
 
+**Signing in opens the dashboard.** A successful `recall login` brings the dashboard up
+on its own (in the background, reusing one that's already running) — being signed in and
+having the dashboard visible are one and the same act. So if you (or the user) just signed
+in, the window onto recall is already there; you don't need to start it by hand.
+
+**At session END / before a compact:** if work is in flight, run
+`recall handoff "<where I am right now>" --files <touched files>`. It stamps the volatile
+state as a snapshot that surfaces in the next session's `recall explain` and in the per-file
+brief of each touched file — so the next session rebuilds from recall, not an ad-hoc summary
+that dies with the context. (Durable instructions are still TASKS, Rule 0; handoff is the
+in-flight 'where I am', not a standing intent.)
+
 ### The rest, while you work
 
-1. **Before editing a file, brief yourself on it.** Run `recall brief <file>` (or open
-   the file in the dashboard — the pre-edit briefing panel sits above the code). The
-   briefing bundles, for that one file: open tasks wired to it (the user's standing
-   intent), WHY it is the way it is (its commits/lessons/ADRs), what BREAKS if you change
-   it (blast radius), and what it depends on — all read-only, 0 tokens (ADR-018). If an
-   open task exists, **read it first** and treat it like a failing test: address it or
-   say why you are not. (Under the hood this is `Index.brief()`; the older path is to
-   `recall "<query>"` and read its `open_tasks` track.) For the team-level view — *which*
-   files are uncertainty hotspots, not what one file holds — `recall contested` ranks the
-   code the team keeps changing (churn × entanglement, ADR-019); a high-ranked file is one
-   to touch with extra care.
+1. **The pre-edit briefing (THE GATE above) is rule one.** `recall brief <file>` bundles,
+   for that one file: open tasks wired to it (the user's standing intent), WHY it is the way
+   it is (its commits/lessons/ADRs), what BREAKS if you change it (blast radius), and what it
+   depends on — all read-only, 0 tokens (ADR-018). If an open task exists, **read it first**
+   and treat it like a failing test: address it or say why you are not. (Under the hood this
+   is `Index.brief()`; the older path is to `recall "<query>"` and read its `open_tasks`
+   track.) For the team-level view — *which* files are uncertainty hotspots, not what one file
+   holds — `recall contested` ranks the code the team keeps changing (churn × entanglement,
+   ADR-019); a high-ranked file is one to touch with extra care.
 2. **When you finish work a task described, update its status.** Set `status: done`
    (or `dropped` / `deferred`) in the task file under `.recall/tasks/`. A task left
    `open` after it is done is a lie the whole team inherits — the same staleness this

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>recall · dashboard</title>
 <!-- favicon: the brand mark (node graph, recalled node gold) inline as a data URL — no extra route, works offline -->
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23252525'/%3E%3Cg transform='translate(4 4)'%3E%3Cpath d='M6 6 L18 8 M6 6 L7 17 M18 8 L7 17 M18 8 L17 18 M7 17 L17 18' stroke='%23f4f4f4' stroke-width='1.4' opacity='.45' fill='none'/%3E%3Ccircle cx='6' cy='6' r='2.4' fill='%23f4f4f4'/%3E%3Ccircle cx='7' cy='17' r='2.4' fill='%23f4f4f4'/%3E%3Ccircle cx='17' cy='18' r='2.4' fill='%23f4f4f4'/%3E%3Ccircle cx='18' cy='8' r='3.1' fill='%23f5c518'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23252525'/%3E%3Cg transform='translate(4 4)'%3E%3Cpath d='M6 6 L18 8 M6 6 L7 17 M18 8 L7 17 M18 8 L17 18 M7 17 L17 18' stroke='%23f4f4f4' stroke-width='1.4' opacity='.45' fill='none'/%3E%3Ccircle cx='6' cy='6' r='2.4' fill='%23f4f4f4'/%3E%3Ccircle cx='7' cy='17' r='2.4' fill='%23f4f4f4'/%3E%3Ccircle cx='17' cy='18' r='2.4' fill='%23f4f4f4'/%3E%3Ccircle cx='18' cy='8' r='3' fill='%23f5c518' stroke='%23d9a800' stroke-width='1'/%3E%3C/g%3E%3C/svg%3E" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -163,12 +163,13 @@ body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:var
    colour, so it stands apart from the green "fresh" badge and the mustard accents
    that are everywhere (Owner 2026-06-13). Strong (this pull) → medium → faint (2 ago).
    g0 also carries a small "new" pill; g1/g2 are bare dots. Per-person, client-only. */
-.pdot{display:inline-flex;align-items:center;gap:5px;flex:none;margin-left:8px}
-.pdot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--oxblood)}
-.pdot--g0::before{background:var(--oxblood);box-shadow:0 0 0 3px var(--oxblood-soft)}
-.pdot--g1::before{background:var(--oxblood);opacity:.6;width:7px;height:7px}
-.pdot--g2::before{background:var(--oxblood);opacity:.32;width:6px;height:6px}
-.pdot__txt{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:var(--oxblood);padding:1px 5px;border-radius:4px}
+.pdot{display:inline-flex;align-items:center;flex:none;margin-left:8px}
+/* three text tiers, fading: g0 = solid red NEW, g1/g2 = progressively quieter
+   outline pills ("1 pull ago" / "2 pulls ago"). One system, three steps. */
+.pdot__txt{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:4px;white-space:nowrap;border:1px solid transparent}
+.pdot--g0 .pdot__txt{color:#fff;background:var(--oxblood);box-shadow:0 0 0 2px var(--oxblood-soft)}
+.pdot--g1 .pdot__txt{color:var(--oxblood);background:var(--oxblood-soft);border-color:var(--oxblood-soft);text-transform:none;letter-spacing:.02em}
+.pdot--g2 .pdot__txt{color:var(--muted);background:transparent;border-color:var(--bone-3);text-transform:none;letter-spacing:.02em;opacity:.85}
 .serif{font-family:var(--serif);font-style:italic;font-weight:400}
 .mono{font-family:var(--mono)}
 /* subtle, rounded scrollbars (shadcn-quiet) — thin track, pill thumb, theme-aware. Keeps
@@ -219,6 +220,11 @@ header{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card
 @keyframes pulseG{0%{box-shadow:0 0 0 0 rgba(92,122,61,.5)}70%{box-shadow:0 0 0 7px rgba(92,122,61,0)}100%{box-shadow:0 0 0 0 rgba(92,122,61,0)}}
 .live.live--idx .dot{background:var(--oxblood);animation:pulseX 1s ease infinite}
 @keyframes pulseX{0%{box-shadow:0 0 0 0 rgba(166,41,31,.6)}70%{box-shadow:0 0 0 6px rgba(166,41,31,0)}100%{box-shadow:0 0 0 0 rgba(166,41,31,0)}}
+/* Build button ALERT state: a security guard is OFF → red + pulsing, impossible to miss.
+   The default (all guards on) is the calm shield; alert turns the whole chip oxblood. */
+#build-btn.proj--alert{border-color:var(--oxblood);color:#fff;background:var(--oxblood);animation:buildAlert 1.6s ease infinite}
+@keyframes buildAlert{0%{box-shadow:0 0 0 0 rgba(166,41,31,.55)}70%{box-shadow:0 0 0 7px rgba(166,41,31,0)}100%{box-shadow:0 0 0 0 rgba(166,41,31,0)}}
+#build-btn.proj--alert .proj__v{color:#fff}
 /* (5) a clearer, more prominent divider between "live" and the "ago" stamp */
 .live__sep{width:1px;height:12px;background:var(--hair-2);margin:0 4px;display:inline-block}
 .live__upd{text-transform:none;letter-spacing:0;color:var(--muted)}
@@ -274,6 +280,68 @@ header{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card
 .hpill--off:hover .hpill__dot{background:var(--paper)}
 .hpill--busy{opacity:.55;pointer-events:none}
 .hpill[disabled]{cursor:default;opacity:.5}
+/* ===== seat-grace ribbon (owner 2026-06-16: developer-friendly online check) =====
+   A full-width amber strip under the header bar when the 60-min seat check failed: the
+   dev keeps working and has 60 min to reconnect, with a live countdown + Reconnect button. */
+.seatwarn{display:flex;align-items:center;gap:10px;padding:7px 16px;
+  background:var(--warn-soft,#fdf3d6);color:var(--warn-ink,#806300);
+  border-top:1px solid var(--warn,#e6b800);font-size:13px;line-height:1.3}
+.seatwarn[hidden]{display:none}
+.seatwarn svg{flex:none;color:var(--warn,#c79100)}
+.seatwarn__txt{flex:1 1 auto}
+.seatwarn__txt b{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:700}
+.seatwarn__btn{appearance:none;flex:none;cursor:pointer;border:1px solid currentColor;
+  background:transparent;color:inherit;font:inherit;font-weight:600;
+  padding:3px 12px;border-radius:7px;transition:background-color .14s,color .14s}
+.seatwarn__btn:hover{background:var(--warn-ink,#806300);color:var(--paper,#fff)}
+.seatwarn__btn:disabled{opacity:.55;cursor:default}
+
+/* ===== one collapsed "connection · n/4" pill (replaces the 4 hpills) =====
+   Green when all 4 modes are healthy; oxblood + pulse when any is off. Hover/click
+   opens a read-only status modal with manual fix hints (no auto-fix — Owner 2026-06-13). */
+.connpill{appearance:none;display:inline-flex;align-items:center;gap:6px;cursor:pointer;height:24px;
+  border:1px solid transparent;background:var(--success-soft);color:var(--success);
+  font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.02em;
+  padding:0 10px;border-radius:8px;transition:background-color .14s;white-space:nowrap}
+.connpill:hover{background:var(--success);color:var(--solid-ink)}
+.connpill__dot{width:6px;height:6px;border-radius:50%;background:var(--success);flex:none}
+.connpill:hover .connpill__dot{background:var(--paper)}
+.connpill--bad{border-color:var(--oxblood);background:var(--oxblood-soft);color:var(--oxblood);
+  animation:connPulse 1.4s ease-in-out infinite}
+.connpill--bad:hover{background:var(--oxblood);color:var(--paper)}
+.connpill--bad .connpill__dot{background:var(--oxblood)}
+.connpill--bad:hover .connpill__dot{background:var(--paper)}
+@keyframes connPulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(166,41,31,.0);transform:translateY(0)}
+  50%{box-shadow:0 0 0 5px rgba(166,41,31,.22);transform:translateY(-1px)}}
+/* the connection-modes status modal: 4 rows, each a mode + status + manual hint */
+.cmode{display:grid;grid-template-columns:auto 1fr auto;align-items:start;gap:12px;
+  padding:13px 2px;border-top:1px solid var(--hair-2)}
+.cmode:first-of-type{border-top:0}
+.cmode__dot{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none;background:var(--success)}
+/* an OFF mode pulses RED so it reads as "needs action", not just a static black/red
+   dot (owner 2026-06-14: "wenn nicht aktiv, sollen die pillen rot sein und pulsieren") */
+.cmode--off .cmode__dot{background:var(--oxblood);animation:pulseX 1.4s ease-in-out infinite}
+.cmode--na .cmode__dot{background:var(--bone-3)}
+@media (prefers-reduced-motion:reduce){.cmode--off .cmode__dot{animation:none}}
+.cmode__name{font-family:var(--mono);font-weight:600;font-size:12px;color:var(--ink)}
+.cmode__state{font-size:11px;font-weight:600;letter-spacing:.02em;margin-top:2px}
+.cmode--on .cmode__state{color:var(--success)}
+.cmode--off .cmode__state{color:var(--oxblood)}
+.cmode--na .cmode__state{color:var(--muted-foreground)}
+.cmode__why{font-size:12.5px;color:var(--muted-foreground);margin-top:5px;line-height:1.45}
+.cmode__cmd{font-family:var(--mono);font-size:11.5px;background:var(--ink);color:var(--paper);
+  padding:3px 8px;border-radius:5px;display:inline-flex;align-items:center;gap:7px;margin-top:6px;
+  border:0;cursor:pointer;transition:opacity .12s,transform .06s}
+.cmode__cmd:hover{opacity:.88}
+.cmode__cmd:active{transform:translateY(1px)}
+.cmode__cmd.copied{background:var(--mustard-3);color:#fff}
+.cmode__cmdic{opacity:.6;font-size:11px}
+.cmode__act{align-self:center}
+.cmode__intro{font-size:12.5px;color:var(--muted-foreground);line-height:1.5;margin:0 0 4px}
+.hiw-docs{display:block;margin:0 0 16px;padding:12px 16px;border-radius:10px;background:rgba(232,179,61,.12);border:1px solid var(--mustard);color:var(--mustard-ink);font-size:13.5px;font-weight:600;text-decoration:none;line-height:1.5}
+.hiw-docs:hover{background:rgba(232,179,61,.2)}
+.hiw-docs__arr{font-weight:700}
 .live.live--stale #live-txt{color:var(--oxblood)}
 /* the refresh-countdown ring inside the live pill — a small clock filling to next poll */
 .live__ring{width:13px;height:13px;flex:none;transform:rotate(-90deg)}
@@ -281,7 +349,7 @@ header{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card
 .live__ring .bg{stroke:var(--bone-3)}
 .live__ring .fg{stroke:var(--success);transition:stroke-dashoffset .9s linear}
 .live--idx .live__ring .fg{stroke:var(--oxblood)}
-@media (prefers-reduced-motion:reduce){.newbadge__dot{animation:none}.live .dot{animation:none}.live__ring .fg{transition:none}.live__ring--spin{animation:none}}
+@media (prefers-reduced-motion:reduce){.newbadge__dot{animation:none}.live .dot{animation:none}.live__ring .fg{transition:none}.live__ring--spin{animation:none}.connpill--bad{animation:none}}
 /* live & auto-stamp settings block (Power tab) */
 .live-block{margin-top:22px;border-radius:var(--ui-radius);box-shadow:var(--ui-ring);background:var(--card);overflow:hidden}
 /* 2-column row: the mode (icon + name + status) on the left, its description + action on
@@ -319,6 +387,15 @@ header{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card
 .pm-open{display:flex;gap:8px;padding:12px 15px;background:var(--ui-muted);border-top:1px solid var(--border)}
 .pm-open input{flex:1;font-family:var(--mono);font-size:var(--fs-meta);padding:8px 11px;border:1px solid var(--input);border-radius:8px;background:var(--field-bg);color:var(--foreground)}
 .pm-open input:focus{outline:none;border-color:var(--ring-color);box-shadow:0 0 0 3px var(--mustard-soft)}
+/* Production⇄Test segment toggle in the project menu (owner 2026-06-18: real
+   projects and temp/pytest sandboxes are two lists; this picks which to show). */
+.pm-seg{display:flex;gap:0;padding:10px 15px 8px;border-bottom:1px solid var(--border)}
+.pm-seg__b{flex:1;font-family:var(--sans);font-size:var(--fs-micro);font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:6px 10px;border:1px solid var(--border);background:var(--field-bg);color:var(--muted-foreground);cursor:pointer}
+.pm-seg__b:first-child{border-radius:8px 0 0 8px;border-right:0}
+.pm-seg__b:last-child{border-radius:0 8px 8px 0}
+.pm-seg__b.on{background:var(--mustard);color:var(--accent-ink);border-color:var(--mustard)}
+.pm-seg__b .pm-seg__n{font-family:var(--mono);opacity:.7;margin-left:5px}
+.pm-flag.test{background:var(--ui-muted);color:var(--muted-foreground)}
 
 /* ---- header: connect-AI button (before account) ---- */
 /* light/dark toggle — a quiet icon button; shows the moon in light mode, the sun in dark */
@@ -440,6 +517,12 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
   transition:background-color .14s,border-color .14s,color .14s}
 .about-link:hover{background:var(--accent);border-color:var(--ring-color)}
 .about-link svg{flex:none;display:block}
+.about-built{display:flex;gap:10px 16px;flex-wrap:wrap}
+.about-built__item{display:inline-flex;align-items:center;gap:7px;
+  color:var(--foreground);text-decoration:none;font-family:var(--sans);
+  font-size:13px;font-weight:500;line-height:1;opacity:.82;transition:opacity .14s}
+.about-built__item:hover{opacity:1}
+.about-built__item svg{flex:none;display:block}
 
 /* header GitHub/Discord icon links — sit after the About tab (owner 2026-06-13).
    Stretch to the full 44px tab row (align-items:stretch on .tabs) and center the SVG,
@@ -532,6 +615,13 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
   font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .ui-row__value--pos{color:var(--success)}
 .ui-row__meta{flex:none;font-family:var(--mono);font-size:11px;color:var(--muted-foreground);white-space:nowrap}
+/* a row line = text (truncating) on the left + a right-aligned trailing badge
+   group (Owner 2026-06-13: drift on the title line, "pulls ago" on the status
+   line — both flush right, stacked, tidy). */
+.ui-row__line{display:flex;align-items:center;gap:8px;min-width:0}
+.ui-row__line>.ui-row__title,.ui-row__line>.ui-row__sub{flex:1;min-width:0}
+.ui-row__tr{flex:none;display:inline-flex;align-items:center;gap:6px;margin-left:auto}
+.ui-row__tr .pdot{margin-left:0}
 /* readable task progress in list rows (owner 2026-06-11: bare 0/4 counters said nothing) */
 .ui-row__prog{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:4px;min-width:74px}
 .ui-row__progbar{width:74px;height:5px;border-radius:999px;background:var(--bone-2);overflow:hidden}
@@ -577,6 +667,12 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 /* a small key→value line (Net Royalties … $0.00) */
 .ui-kv{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;padding:4px 0}
 .ui-kv__k{color:var(--muted-foreground)} .ui-kv__v{font-weight:500;color:var(--foreground);font-variant-numeric:tabular-nums}
+/* clickable plan rows on the local Account tab → open the web billing page (owner 2026-06-14) */
+.dash-planrow{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;padding:7px 10px;margin:2px -10px;border-radius:8px;text-decoration:none;color:inherit;transition:background .12s}
+.dash-planrow:hover{background:var(--muted)}
+.dash-planrow .ui-kv__v{display:inline-flex;align-items:center;gap:8px}
+.dash-planrow__go{color:var(--gold-ink);font-weight:700;opacity:0;transition:opacity .12s}
+.dash-planrow:hover .dash-planrow__go{opacity:1}
 
 /* ════════════════════════════════════════════════════════════════════════════
    DRIFT-GUARD / house rules for the kit (Owner 2026-06-10, the full rebuild):
@@ -754,6 +850,85 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
   max-width:96vw;max-height:92vh;box-shadow:var(--ui-ring),var(--ui-shadow)}
 .modalbox::after{content:"⤡";position:absolute;right:6px;bottom:4px;color:var(--muted-foreground);font-size:var(--fs-body);pointer-events:none}
 .modalbox{position:relative}
+/* Build & share settings modal */
+.build-ovl{position:fixed;inset:0;background:rgba(20,18,15,.42);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:7vh 16px}
+.build-modal{background:var(--card);color:var(--card-foreground);border:1px solid var(--hair);border-radius:var(--ui-radius);width:560px;max-width:96vw;box-shadow:var(--ui-shadow);overflow:hidden}
+.build-modal__head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:16px 18px;border-bottom:1px solid var(--hair)}
+.build-modal__sub{color:var(--muted-foreground);font-size:var(--fs-small);margin-top:3px;max-width:46ch}
+.build-x{border:0;background:none;color:var(--muted-foreground);font-size:16px;cursor:pointer;line-height:1;padding:2px 6px}
+.build-x:hover{color:var(--card-foreground)}
+.build-grp{font-size:var(--fs-small);font-weight:600;letter-spacing:.04em;color:var(--mustard-ink);text-transform:uppercase;padding:14px 18px 4px}
+.build-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:11px 18px;border-bottom:1px dashed var(--hair)}
+.build-row__l{display:flex;flex-direction:column;gap:2px;max-width:64%}
+.build-row__t{display:flex;align-items:center;gap:7px}
+.build-row__h{color:var(--muted-foreground);font-size:var(--fs-small)}
+.build-guard{flex:none;font-size:10px;font-weight:600;color:var(--oxblood);border:1px solid var(--oxblood);border-radius:4px;padding:1px 5px;line-height:1.3}
+.build-sel,.build-txt{font:inherit;font-size:var(--fs-body);padding:6px 9px;border:1px solid var(--hair-2);border-radius:7px;background:var(--paper,#fff);color:var(--card-foreground);min-width:200px}
+.build-tog{width:18px;height:18px;accent-color:var(--success);cursor:pointer;flex:none}
+.build-warn{margin:12px 18px 0;padding:9px 12px;border-radius:8px;background:rgba(166,41,31,.08);border:1px solid var(--oxblood);color:var(--oxblood);font-size:var(--fs-small)}
+.build-foot{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 18px;margin-top:6px}
+.build-foot__note{color:var(--muted-foreground);font-size:var(--fs-small)}
+
+/* ===== live activity console (v7) — a free-floating, draggable, pinnable, resizable
+   panel that streams every recall call (brief/recall/explain/stamp) as a usage proof.
+   Forced dark (console look) in BOTH themes. Closes ONLY via its ✕ — no scrim, immune to
+   Escape + click-outside + tab-change (its overlay id is NOT in the Escape array). ===== */
+/* z-index 46: above the page, but BELOW workspace modals (z 50-60). Simple fixed order —
+   a file modal opened from the console sits in front; close it to return to the console. */
+.console-panel{position:fixed;z-index:46;display:none;flex-direction:column;
+  width:560px;height:380px;min-width:360px;min-height:220px;max-width:96vw;max-height:90vh;
+  background:#11140f;color:#d7e0cc;border:1px solid #2a2f22;border-radius:10px;overflow:hidden;
+  box-shadow:0 18px 50px rgba(0,0,0,.5);resize:both;font-family:var(--mono)}
+.console-panel.on{display:flex}
+.console-panel.pinned{box-shadow:0 0 0 1px var(--mustard),0 18px 50px rgba(0,0,0,.55)}
+.con-head{display:flex;align-items:center;gap:10px;padding:8px 10px;background:#171b13;
+  border-bottom:1px solid #2a2f22;cursor:grab;user-select:none;flex:none}
+.con-head:active{cursor:grabbing}
+.console-panel.pinned .con-head{cursor:default}        /* pinned = locked, not draggable */
+.console-panel.pinned{resize:none}                     /* pinned also locks the size */
+.con-light{width:9px;height:9px;border-radius:50%;background:#3a4030;flex:none;transition:background .15s}
+.con-light.blink{background:var(--mustard);box-shadow:0 0 7px var(--mustard);animation:conBlink .6s ease}
+@keyframes conBlink{0%{opacity:.4}50%{opacity:1}100%{opacity:.7}}
+.con-title{font-size:11px;font-weight:600;letter-spacing:.04em;color:#aeb89e;flex:1}
+.con-title b{color:#d7e0cc}
+.con-hbtn{appearance:none;border:1px solid #2a2f22;background:#1d2218;color:#aeb89e;
+  font-family:var(--mono);font-size:11px;cursor:pointer;border-radius:5px;padding:2px 7px}
+.con-hbtn:hover{background:#262c1d;color:#e7eede}
+.con-hbtn.on{background:var(--mustard);color:#1a1a12;border-color:var(--mustard)}
+.con-x{margin-left:2px;font-size:13px;line-height:1;padding:2px 6px}
+.con-body{display:flex;flex:1;min-height:0}
+.con-filters{width:128px;flex:none;border-right:1px solid #2a2f22;padding:8px 6px;overflow:auto;background:#13160f}
+.con-fgrp{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:#6f7861;margin:6px 4px 3px}
+.con-fopt{display:flex;align-items:center;gap:6px;font-size:11px;color:#bcc6ac;padding:3px 4px;cursor:pointer;border-radius:4px}
+.con-fopt:hover{background:#1d2218}
+.con-fopt input{width:12px;height:12px;accent-color:var(--mustard);cursor:pointer}
+.con-stream{flex:1;min-width:0;overflow:auto;padding:6px 0;font-size:11.5px;line-height:1.5}
+.con-empty{color:#6f7861;padding:14px 14px;font-size:11px;line-height:1.6}
+.con-row{display:flex;gap:10px;padding:1px 12px;white-space:nowrap}
+.con-row:hover{background:#181d12}
+.con-row__t{color:#6f7861;flex:none;font-variant-numeric:tabular-nums}
+/* action + source columns size to the WIDEST label (dead-code / precedent / dashboard are 9ch)
+   via a ch-based min-width, so every row's columns line up AND no label collides with the next
+   (the gap is on .con-row). ch units track the monospace font, so it stays aligned at any zoom. */
+.con-row__k{flex:none;font-weight:700;min-width:10ch}
+.con-row__c{flex:none;color:#8a937b;min-width:10ch}
+.con-row__q{color:#c4cdb6;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.con-row__f{flex:none;color:#7f8a6e;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.con-row__f::before{content:"→ ";color:#5d6650}
+.con-file{cursor:pointer}
+.con-file:hover{color:#e3c45a;text-decoration:underline}
+.con-row__lat{color:#5d6650;flex:none;margin-left:auto;padding-left:8px;font-variant-numeric:tabular-nums}
+.ck-brief{color:#7fd1a6}.ck-recall{color:#e3c45a}.ck-explain{color:#7ab8e0}.ck-stamp{color:#c89be0}
+/* code-intelligence family — a cooler palette so they read as one group, distinct from the 4 core */
+.ck-impact{color:#e0976a}.ck-precedent{color:#d6b06a}
+.ck-callers{color:#8fc7d6}.ck-callees{color:#8fc7d6}
+.ck-dead_code{color:#d67f7f}.ck-untested{color:#d6a96a}.ck-cycles{color:#b79bd6}
+.con-newcount{font-size:10px;color:#1a1a12;background:var(--mustard);border-radius:9px;padding:0 6px;font-weight:700}
+/* reload divider: one line per reload-with-new-activity. Hover shows the full stamp. */
+.con-sep{display:flex;align-items:center;gap:8px;padding:5px 12px;color:#6f7861;font-size:10px;
+  letter-spacing:.04em;cursor:default;user-select:none}
+.con-sep::before,.con-sep::after{content:"";flex:1;height:1px;background:#262c1d}
+.con-sep span{white-space:nowrap}
 
 /* ---- lists / feed ---- */
 .list{border-radius:var(--ui-radius);box-shadow:var(--ui-ring);background:var(--card);overflow:hidden}
@@ -771,6 +946,7 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .badge.fresh{color:var(--success);border-color:var(--success)} .badge.fresh .b{background:var(--success)}
 .badge.committed{color:var(--warning);border-color:var(--warning)} .badge.committed .b{background:var(--warning)}
 .badge.uncommitted{color:var(--oxblood);border-color:var(--oxblood)} .badge.uncommitted .b{background:var(--oxblood)}
+.badge.broken{color:#dc2626;border-color:#dc2626;font-weight:700} .badge.broken .b{background:#dc2626}
 .whyline{font-family:var(--sans);font-size:var(--fs-body);line-height:1.45;color:var(--ink-2);margin:2px 0 6px;max-width:90ch}
 .meta{font-family:var(--mono);font-size:var(--fs-micro);color:var(--muted);display:flex;flex-wrap:wrap;gap:3px 14px}
 .meta .e{color:var(--ink-2)} .meta .dim{color:var(--mute-2)}
@@ -792,6 +968,22 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .wiki__entry .we-title{flex:1;min-width:0;font-weight:500;font-size:var(--fs-body);letter-spacing:-.005em;line-height:1.35;
   overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .wiki__entry .m{font-family:var(--mono);font-size:var(--fs-micro);color:var(--muted-foreground);margin-top:7px}
+/* four tidy lines (Owner 2026-06-13): headline · who+file+edges · time+new · the
+   rest of the badges. All lines but the headline indent under the icon (34px).
+   Headline a notch smaller (fs-sm) so the whole card breathes. */
+.wiki__entry .we-l1{display:flex;align-items:center;gap:8px}
+/* the headline icon is dezent here — a small currentColor glyph, not the big
+   34px filled square (Owner 2026-06-13: "nirgends sonst so groß"). 18px box. */
+.wiki__entry .we-l1 .ui-row__icon{width:18px;height:18px;border-radius:5px;background:transparent;color:var(--muted-foreground)}
+.wiki__entry .we-l1 .ui-row__icon .ic-svg{width:15px;height:15px}
+.wiki__entry .we-l1 .we-title{font-size:var(--fs-sm,13px);font-weight:600}
+.wiki__entry .we-l2,.wiki__entry .we-l4{margin-left:26px;margin-top:5px}
+.wiki__entry .we-l2{font-family:var(--mono);font-size:var(--fs-micro);color:var(--muted-foreground);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wiki__entry .we-l3{margin-left:26px;margin-top:4px;display:flex;align-items:center;gap:8px}
+.wiki__entry .we-l3 .we-time{flex:1;min-width:0;font-family:var(--mono);font-size:var(--fs-micro);color:var(--muted-foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wiki__entry .we-l3__tr{flex:none;margin-left:auto}
+.wiki__entry .we-l3__tr .pdot{margin-left:0}
+.wiki__entry .we-l4{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .wiki__read{background:var(--card);border-radius:var(--ui-radius);box-shadow:var(--ui-ring);padding:28px 32px;overflow:auto}
 .wiki__read .secnum{font-family:var(--sans);font-size:var(--fs-micro);letter-spacing:.12em;text-transform:uppercase;color:var(--muted-foreground);margin-bottom:10px;display:flex;align-items:center;gap:12px}
 .wiki__read h1{font-size:27px;line-height:1.12;letter-spacing:-.03em;font-weight:600;margin-bottom:16px;max-width:30ch}
@@ -916,7 +1108,9 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .task-flip{display:inline-flex;align-items:center;gap:6px;margin:6px 0 2px;padding:3px 10px;
   font-family:var(--mono);font-size:var(--fs-micro);color:var(--gold-ink);background:var(--mustard-soft);
   border-radius:var(--r-pill)}
-.st-txt{flex:1;min-width:0}
+.st-main{flex:1;min-width:0}
+.st-txt{display:inline}
+.st-by{display:block;margin-top:2px;font-size:var(--fs-meta);color:var(--muted-foreground);font-family:var(--mono);text-decoration:none!important}
 .task-card__subprev{font-family:var(--mono);font-size:var(--fs-micro);color:var(--mute-2);margin-top:6px}
 .task-filt{display:inline-flex;gap:2px;margin-bottom:16px;padding:3px;border-radius:10px;background:var(--ui-muted)}
 .task-filt button{font-family:var(--sans);font-size:12px;font-weight:500;height:26px;padding:0 12px;border-radius:8px;
@@ -1029,6 +1223,9 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .step__card{border-radius:var(--ui-radius);box-shadow:var(--ui-ring);background:var(--card);padding:16px 18px}
 .step__t{font-weight:600;font-size:var(--fs-lead);letter-spacing:-.01em;line-height:1.3;margin-bottom:6px}
 .step__why{font-family:var(--sans);font-size:var(--fs-lead);line-height:1.55;color:var(--ink-2)}
+/* empty-state for a CORE chain step that has nothing recorded — quiet + italic so it reads
+   as "intentionally nothing here", never as a broken/missing step (Owner 2026-06-15). */
+.step__empty{font-family:var(--sans);font-size:var(--fs-body);line-height:1.5;color:var(--mute-2);font-style:italic}
 .conseq{display:grid;gap:1px;background:var(--hair);border:1px solid var(--hair)}
 .conseq__r{background:var(--paper);padding:11px 15px;display:flex;align-items:center;gap:12px;font-size:var(--fs-body);cursor:pointer;transition:background .12s}
 .conseq__r:hover{background:var(--mustard-soft)}
@@ -1037,6 +1234,11 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .conseq__r .go-arrow{font-family:var(--mono);color:var(--mute-2);font-size:var(--fs-lead)}
 .conseq__r:hover .go-arrow{color:var(--ink)}
 .result-line{display:inline-flex;align-items:center;gap:10px;font-size:var(--fs-lead)}
+/* predicate check (arrow 1) — the re-runnable claim shown as code in the chain */
+.pred{font-family:var(--mono);font-size:var(--fs-micro);background:var(--paper);border:1px solid var(--hair);border-radius:4px;padding:2px 6px;color:var(--ink-2)}
+/* conclusion = what was learned (the real end of the chain, not a freshness state) */
+.conclusion{font-size:var(--fs-lead);line-height:1.5}
+.conclusion p:first-child{margin-top:0} .conclusion p:last-child{margin-bottom:0}
 
 /* ---- DIFF renderer (self-built before/after) ---- */
 .diffwrap{border:1px solid var(--hair);background:var(--paper)}  /* NOT overflow:hidden — it clipped the resize grip */
@@ -1257,6 +1459,8 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .md-tbl th,.md-tbl td{border:1px solid var(--hair-2);padding:6px 10px;text-align:left}
 .md-tbl th{background:var(--bone-2);font-weight:600}
 .md-wl{font-family:var(--mono);font-size:.9em;color:var(--gold-ink);background:var(--mustard-soft);padding:0 4px}
+.md-wl--link{cursor:pointer;border-radius:3px}
+.md-wl--link:hover{background:var(--mustard);color:var(--mustard-ink);text-decoration:underline}
 
 /* live progress bar (power = oxblood, index = mustard indeterminate) */
 .prog{margin:10px 0;border:1px solid var(--hair);background:var(--bone-2);height:26px;position:relative;overflow:hidden}
@@ -1347,8 +1551,10 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
 .bf-row .sha{font-family:var(--mono);font-size:var(--fs-micro);color:var(--mute-2);flex:none}
 .bf-stale{font-family:var(--mono);font-size:var(--fs-micro);font-weight:700;color:var(--oxblood);flex:none}
 .bf-syms{display:flex;flex-wrap:wrap;gap:5px}
+/* the symbol chips: a visible pill in BOTH themes. The muted fill alone is near-invisible on
+   the dark card (#2a2a2a on ~#1e1e1e), so a hairline border restores the chip look (Owner). */
 .bf-sym{font-family:var(--mono);font-size:var(--fs-micro);color:var(--foreground);background:var(--ui-muted);
-  border:1px solid transparent;border-radius:var(--r-pill);padding:1px 8px}
+  border:1px solid var(--hair-2);border-radius:var(--r-pill);padding:1px 8px}
 .bf-more{font-family:var(--mono);font-size:var(--fs-micro);color:var(--mute-2);padding:1px 4px}
 /* the briefing folded into the wiki story (step 4b) — inline card, not a collapsed bar */
 .bf-body--story{padding:2px 0 0;background:none}
@@ -1494,9 +1700,99 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
   .pbody{padding-left:18px;padding-right:18px}
   .phead{padding-left:18px;padding-right:18px}
 }
+
+/* ===== LOGIN GATE — full-screen sign-in cover (owner 2026-06-14) ===== */
+/* Visible by DEFAULT so nothing flashes behind it before /api/license resolves.
+   Deliberately WHITE even in dark mode (owner: "schön white bg"). Fixed + top
+   z-index so the header/nav/panels behind it are fully hidden and unreachable. */
+#login-gate{
+  position:fixed; inset:0; z-index:10000;
+  display:flex; align-items:center; justify-content:center;
+  background:#ffffff; padding:24px;
+  /* a soft warm wash so the white isn't clinical */
+  background-image:radial-gradient(120% 80% at 50% -10%, rgba(245,197,24,.10), transparent 60%);
+}
+#login-gate[hidden]{ display:none; }
+.lgate__card{
+  width:100%; max-width:420px; text-align:center;
+  color:#252525;
+  font-family:var(--sans, system-ui, sans-serif);
+}
+.lgate__brand{
+  display:inline-flex; align-items:center; gap:9px;
+  color:#252525; margin-bottom:26px;
+}
+.lgate__word{ font-size:18px; font-weight:600; letter-spacing:-.01em; }
+.lgate__word .mark{ color:#d9a800; }
+.lgate__title{ font-size:26px; font-weight:650; letter-spacing:-.02em; margin:0 0 8px; color:#1b1b1b; }
+.lgate__sub{ font-size:14px; line-height:1.5; color:#5a5a5a; margin:0 0 26px; }
+.lgate__kick{ display:flex; gap:9px; align-items:flex-start; text-align:left;
+  background:#fff4f3; border:1px solid #f3c9c4; color:#8a2018; border-radius:11px;
+  padding:11px 13px; margin:0 0 20px; font-size:12.5px; line-height:1.5; }
+.lgate__kick[hidden]{ display:none; }
+.lgate__kick svg{ flex:none; margin-top:1px; }
+.lgate__card #gate-btn{ font-size:15px; }
+.lgate__msg{ min-height:18px; font-size:12px; line-height:1.5; color:#5a5a5a; margin-top:12px; }
+.lgate__msg a{ color:#7a5e00; }
+.lgate__fine{ font-size:12px; line-height:1.55; color:#7a7a7a; margin:18px 0 0; }
+.lgate__fine b{ color:#454545; font-weight:600; }
+.lgate__air{ margin-top:20px; text-align:left; }
+.lgate__air > summary{ cursor:pointer; color:#8a8a8a; font-size:12px; text-align:center; list-style:none; }
+.lgate__air > summary::-webkit-details-marker{ display:none; }
+.lgate__air[open] > summary{ margin-bottom:12px; }
+.lgate__airbody{ background:#f6f6f6; border:1px solid #e6e6e6; border-radius:12px; padding:14px; }
+.lgate__airbody .lgate__msg{ text-align:left; }
+@media(max-width:520px){
+  .lgate__title{ font-size:22px; }
+}
 </style>
 </head>
 <body>
+<!-- LOGIN GATE — when not signed in, this full-screen white cover is the ONLY thing
+     visible (owner 2026-06-14: "nicht eingeloggt → sofort die Login-Maske, weißer BG,
+     man sieht/kann nichts anderes"). Shown by default (CSS) so the dashboard never
+     flashes behind it before /api/license resolves; applyLoginGate() hides it once
+     LIC is set. Reuses the same device-flow login as the Account tab. -->
+<div id="login-gate">
+  <div class="lgate__card">
+    <div class="lgate__brand">
+      <svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 6 L18 8 M6 6 L7 17 M18 8 L7 17 M18 8 L17 18 M7 17 L17 18"
+              stroke="currentColor" stroke-width="1.4" opacity=".45" fill="none"/>
+        <circle cx="6" cy="6" r="2.4" fill="currentColor"/>
+        <circle cx="7" cy="17" r="2.4" fill="currentColor"/>
+        <circle cx="17" cy="18" r="2.4" fill="currentColor"/>
+        <circle cx="18" cy="8" r="4.6" fill="none" stroke="var(--mustard)" opacity=".35"/>
+        <circle cx="18" cy="8" r="3.1" fill="var(--mustard)"/>
+      </svg>
+      <span class="lgate__word">whatever-<span class="mark">recall</span></span>
+    </div>
+    <!-- kicked-out notice: shown only when the 60-min seat check found this device's
+         license was taken over by another machine (owner 2026-06-14). -->
+    <div class="lgate__kick" id="gate-kick" hidden>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.5v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.2" r=".95" fill="currentColor"/></svg>
+      <span>You were signed out from another device. Each seat is for one active device at a time — sign in again to keep working on this machine.</span>
+    </div>
+    <h1 class="lgate__title">Welcome back.</h1>
+    <p class="lgate__sub">Sign in to open your dashboard.<br>One click — the browser opens, you sign in.</p>
+    <button class="ui-btn ui-btn--primary ui-btn--block ui-btn--lg" id="gate-btn" onclick="gateLogin()">Login</button>
+    <div class="lgate__msg" id="gate-msg"></div>
+    <p class="lgate__fine">
+      The browser opens whatever-recall.com — sign in with <b>email, Google, GitHub or Discord</b>,
+      confirm, done. No account yet? Start free there — <b>14-day trial, no card</b>.
+      The engine confirms your seat with a brief online check about once an hour — your code never leaves this machine.
+    </p>
+    <details class="lgate__air">
+      <summary>CI / headless (no browser)? Set the token manually</summary>
+      <div class="lgate__airbody">
+        <p class="lgate__fine" style="margin:0 0 8px">For CI / headless: grab the token on the website (Account → My license key) and paste it here — or set it as <code class="dash-mono" style="font-family:var(--mono)">RECALL_LICENSE</code>.</p>
+        <textarea class="ui-input" id="gate-token" rows="3" placeholder="eyJzdWIiOi…  .  …signature" style="width:100%;margin:6px 0 12px;font-family:var(--mono);font-size:var(--fs-meta);resize:vertical"></textarea>
+        <button class="ui-btn ui-btn--outline ui-btn--block" onclick="gateSaveToken()">Save token</button>
+        <div class="lgate__msg" id="gate-token-msg"></div>
+      </div>
+    </details>
+  </div>
+</div>
 <header>
   <div class="bar">
     <div class="brand">
@@ -1517,6 +1813,19 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
       <span class="proj__caret">▾</span>
     </button>
     <div class="proj-menu" id="proj-menu" hidden></div>
+    <!-- live activity console — a floating proof that recall is being used (brief/recall/explain/stamp) -->
+    <button class="proj" id="console-btn" onclick="toggleConsole()" title="open the live activity console — see recall being used in real time"
+      style="gap:7px">
+      <span class="con-light" id="console-btn-light" style="width:8px;height:8px"></span>
+      <span class="proj__v">console</span>
+    </button>
+    <!-- Build Settings — what may leave this machine (visibility, leak guards, export).
+         Turns RED + pulses when a security guard is OFF, so an unsafe config is obvious. -->
+    <button class="proj" id="build-btn" onclick="openBuildSettings()" title="build & share settings — what leaves this machine"
+      style="gap:7px">
+      <span class="build-shield" id="build-btn-shield">🛡️</span>
+      <span class="proj__v">build</span>
+    </button>
     <!-- ONE global search — routes to the active tab's filter (set up in wireGlobalSearch) -->
     <div class="gsearch" id="gsearch">
       <svg class="ic-svg" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -1561,12 +1870,20 @@ nav{flex:0 0 auto;border-bottom:1px solid var(--border);background:var(--card)}
       <svg class="theme-tog__moon" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13 9.4A5.4 5.4 0 1 1 6.6 3 4.2 4.2 0 0 0 13 9.4z" fill="currentColor"/></svg>
     </button>
   </div>
+  <!-- seat-grace ribbon (owner 2026-06-16: developer-friendly online check) — shown only
+       when the 60-min seat check failed; the dev keeps working and has 60 min to reconnect,
+       with a live countdown + Reconnect button. Hidden when the seat is confirmed. -->
+  <div class="seatwarn" id="seat-warn" hidden role="status" aria-live="polite">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.6 1.2 13.4h13.6L8 1.6z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 6v3.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.4" r=".95" fill="currentColor"/></svg>
+    <span class="seatwarn__txt">Account check failed — you’ll be signed out in <b id="seat-warn-timer">60:00</b> unless you reconnect.</span>
+    <button class="seatwarn__btn" id="seat-warn-btn" onclick="reconnectSeat()">Reconnect</button>
+  </div>
 </header>
 <nav>
   <div class="tabs">
     <button class="tab" data-p="start">Start here</button>
     <button class="tab on" data-p="overview">Overview</button>
-    <button class="tab" data-p="wiki">Wiki</button>
+    <button class="tab" data-p="wiki">Brain</button>
     <button class="tab" data-p="tasks">Tasks</button>
     <button class="tab" data-p="git">Git</button>
     <button class="tab" data-p="drift">Drift</button>
@@ -1609,7 +1926,7 @@ function mdToHtml(src){
     .replace(/`([^`]+)`/g,'<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*]+)\*/g,'$1<em>$2</em>')
-    .replace(/\[\[([^\]]+)\]\]/g,'<span class="md-wl">$1</span>');  // [[wikilink]]
+    .replace(/\[\[([^\]]+)\]\]/g,(m,n)=>`<span class="md-wl md-wl--link" onclick="openWiki('${jsStr(n.trim())}')" title="open ${esc(n.trim())}">${esc(n.trim())}</span>`);  // [[wikilink]] → clickable
   while(i<lines.length){
     let ln=lines[i];
     // fenced code block ```lang
@@ -1642,12 +1959,19 @@ function mdToHtml(src){
     const ol=ln.match(/^\s*\d+\.\s+(.*)$/);
     if(ol){ if(inUl){out+='</ul>';inUl=false;} if(!inOl){out+='<ol class="md-ol">';inOl=true;} out+=`<li>${inline(ol[1])}</li>`; i++; continue; }
     if(/^\s*$/.test(ln)){ closeLists(); i++; continue; }
+    // lazy continuation: a non-blank prose line directly under an open list belongs
+    // to the LAST <li> (CommonMark) — so a bullet wrapped across source lines stays
+    // one item instead of breaking out into a stray <p>. We close the open <li> and
+    // reopen it with the joined text (the list tag is already open).
+    if((inUl||inOl) && /\<li\>[^]*\<\/li\>$/.test(out)){
+      out=out.replace(/\<li\>([^]*?)\<\/li\>$/, (_,c)=>`<li>${c} ${inline(ln)}</li>`); i++; continue;
+    }
     closeLists(); out+=`<p class="md-p">${inline(ln)}</p>`; i++;
   }
   closeLists();
   return out;
 }
-const badge = lvl => { const lab = lvl==='committed'?'check':lvl==='uncommitted'?'edited':'fresh';
+const badge = lvl => { const lab = lvl==='broken'?'broken':lvl==='committed'?'check':lvl==='uncommitted'?'edited':'fresh';
   return `<span class="badge ${lvl}"><span class="b"></span>${lab}</span>`; };
 function ago(ts){ if(!ts) return ''; const s=Math.floor(Date.now()/1000-ts);
   if(s<60) return 'just now'; if(s<3600) return Math.floor(s/60)+'m ago'; if(s<86400) return Math.floor(s/3600)+'h ago';
@@ -1669,19 +1993,54 @@ function whoWhen(label, ts, by){
 }
 
 async function load(){
-  const r = await fetch('/api/data'); DATA = await r.json();
-  _loadPullGens(); recordPullAll();   // seed/advance the "what's new since last pull" tiers
+  // LOGIN GATE FIRST (owner 2026-06-14): decide signed-in BEFORE anything else
+  // boots, so the dashboard — and especially any auto-opening modal/tour/console —
+  // never appears behind the cover. If not signed in we paint ONLY the gate and
+  // stop; the rest of the boot runs after a successful login (onSignedIn → bootApp).
+  await loadLicense();
+  // same canonical predicate as applyLoginGate (bug-hunt #1): a pending/unverified token
+  // must paint the gate, not boot the app.
+  if(!LIC || LIC.verified !== true || LIC.expired || LIC.pending){ applyLoginGate(); return; }
+  await bootApp();
+}
+/* Centralized /api/data fetch with the W2 gate-on-402 behavior (bug-hunt LOW,
+   2026-06-17). The server returns HTTP 402 {"signed_in":false} the moment the license
+   lapses mid-session, and 500 on a route exception. The old call sites did
+   `DATA = await r.json()` with no r.ok check, so DATA silently became the error object
+   and the dashboard rendered blank with no "you were signed out" signal — the opposite
+   of the gate's intent. Now: 402 -> re-show the login gate; other non-200 -> keep the
+   previous DATA (return false so callers can skip a re-render). Returns true on success. */
+async function fetchData(){
+  let r;
+  try{ r = await fetch('/api/data'); }catch(e){ return false; }  // network blip: keep last DATA
+  if(r.status===402){ LIC=null; applyLoginGate('expired'); return false; }
+  if(!r.ok){ return false; }                                     // 500 etc.: keep last DATA
+  try{ DATA = await r.json(); }catch(e){ return false; }
+  return true;
+}
+let _appBooted=false;
+async function bootApp(){
+  if(_appBooted) return;          // login may fire this after the gate; run once
+  _appBooted=true;
+  if(!(await fetchData())) return;  // signed out / error at boot → gate already shown
+  // load the saved pull-generation tiers and SEED on the very first run, but do
+  // NOT advance them here — opening/reloading the page is not a "pull". Tiers
+  // only advance on a deliberate manual pull (goToNew). This was the bug: every
+  // page load consumed a generation, so NEW looked arbitrary (Owner 2026-06-13).
+  _loadPullGens(); seedPullGens();
   await loadConnection();  // know the AI connection before any tab paints
   await loadProjects();    // know the project + recent list for the header switcher
-  loadLicense();           // the stored account license, async (ADR-030)
   await loadHook();        // git hook status for the Power-tab live block + header pills
   loadRulesStatus();       // rules.md health pill (no await — paints when it resolves)
   loadMcp();               // MCP registration pill (no await — paints when it resolves)
   loadHeaderLinks();       // GitHub/Discord icons after the About tab (no await)
   renderHeaderConnect();
+  _conReloadDividerOnce();  // drop ONE "reloaded" divider iff new activity since last load (Owner: not 23 lines for 23 reloads)
+  _conMaybeReopen();       // a PINNED console reopens itself at its saved position (Owner: pin survives reload)
   maybeTour();             // FIRST open: the welcome tour (before the first tab paints its hint)
   renderAll(); switchTab('overview');
   startPulse();            // LIVE mode: watch git + index, auto-refresh + toast
+  startSeatCheck();        // single-device enforcement: 60-min "am I still the active device?" check
 }
 
 /* The two header icon links after the About tab: GitHub (always, the repo) and Discord
@@ -1703,10 +2062,11 @@ function loadHeaderLinks(){
 }
 
 /* ===== header: project switcher ===== */
-let PROJECTS = {current:null, recent:[]};
+let PROJECTS = {current:null, recent:[], recent_test:[]};
+let PM_VIEW = 'prod';  // 'prod' = real projects · 'test' = temp/pytest sandboxes
 async function loadProjects(){
   try{ const r=await fetch('/api/projects'); PROJECTS=await r.json(); }
-  catch(e){ PROJECTS={current:{name:DATA.repo||'—',path:'',indexed:!DATA.no_index},recent:[]}; }
+  catch(e){ PROJECTS={current:{name:DATA.repo||'—',path:'',indexed:!DATA.no_index},recent:[],recent_test:[]}; }
   renderProjectButton();
 }
 function renderProjectButton(){
@@ -1724,21 +2084,34 @@ function _closeProjOnce(e){
   const m=document.getElementById('proj-menu'), b=document.getElementById('proj-btn');
   if(m && !m.contains(e.target) && e.target!==b && !b.contains(e.target)){ m.hidden=true; document.removeEventListener('click',_closeProjOnce); }
 }
+function setProjView(v){ PM_VIEW = (v==='test'?'test':'prod'); renderProjectMenu(); }
 function renderProjectMenu(){
   const m=document.getElementById('proj-menu'); if(!m) return;
   const cur=PROJECTS.current||{};
-  const all=[{...cur, current:true}].concat((PROJECTS.recent||[]).filter(r=>!r.current));
+  const prod=(PROJECTS.recent||[]), test=(PROJECTS.recent_test||[]);
+  // The current project always shows at the top — it's where the dashboard points,
+  // regardless of which list you're browsing. Below it: the picked list, minus the
+  // current entry (it's already pinned on top).
+  const list = PM_VIEW==='test' ? test : prod;
+  const all=[{...cur, current:true}].concat(list.filter(r=>!r.current));
   const rows=all.map(r=>`
     <div class="pm-item ${r.current?'cur':''}" ${r.current?'':`onclick="switchProject('${jsStr(r.path)}')"`}>
       <div class="pm-item__l">
         <div class="pm-name">${esc(r.name||'—')}</div>
         <div class="pm-path">${esc(r.path||'')}</div>
       </div>
-      ${r.current?'<span class="pm-flag cur">current</span>':(r.indexed?'':'<span class="pm-flag noidx">no index</span>')}
+      ${r.current?'<span class="pm-flag cur">current</span>':(PM_VIEW==='test'?'<span class="pm-flag test">test</span>':(r.indexed?'':'<span class="pm-flag noidx">no index</span>'))}
     </div>`).join('');
+  const empty = PM_VIEW==='test'
+    ? 'no test sandboxes yet'
+    : 'no recent projects';
   m.innerHTML=`
     <div class="pm-head">Projects</div>
-    ${rows||'<div class="pm-item"><div class="pm-name">no recent projects</div></div>'}
+    <div class="pm-seg">
+      <button class="pm-seg__b ${PM_VIEW==='prod'?'on':''}" onclick="setProjView('prod')">Production<span class="pm-seg__n">${prod.length}</span></button>
+      <button class="pm-seg__b ${PM_VIEW==='test'?'on':''}" onclick="setProjView('test')">Test<span class="pm-seg__n">${test.length}</span></button>
+    </div>
+    ${rows||`<div class="pm-item"><div class="pm-name">${empty}</div></div>`}
     <div class="pm-open">
       <input id="pm-path" placeholder="paste a project folder path…" onkeydown="if(event.key==='Enter')openProjectFromInput()"/>
       <button class="btn go" onclick="openProjectFromInput()">Open</button>
@@ -1753,8 +2126,8 @@ async function switchProject(path){
     const r=await fetch('/api/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
     const d=await r.json();
     if(!r.ok||d.error){ alert(d.error||('error '+r.status)); return; }
-    // re-pull everything for the new repo
-    const dr=await fetch('/api/data'); DATA=await dr.json();
+    // re-pull everything for the new repo (gate-aware: 402 re-shows the login gate)
+    if(!(await fetchData())) return;
     PULSE=null; clearNewBadge();  // new project → re-baseline heartbeat + drop stale "new" count
     await loadHook();  // the new project has its own .git → its own hook state
     document.getElementById('proj-menu').hidden=true;
@@ -1929,7 +2302,7 @@ function clearNewBadge(){ NEW.commits=0; NEW.lessons=0; renderNewBadge(); }
 async function goToNew(){
   // the user chose to refresh — NOW we pull fresh data + rebuild (safe: it's deliberate).
   clearNewBadge();
-  try{ const dr=await fetch('/api/data'); DATA=await dr.json(); recordPullAll(); }catch(e){}
+  if(await fetchData()){ recordPullAll(); }  // gate-aware: 402 re-shows the login gate
   CONTESTED_CACHE=STALE_CACHE=null;  // new commits → the lazy git scans must re-run
   document.querySelectorAll('.panel').forEach(p=>p.remove());
   renderAll(); switchTab('overview');
@@ -2059,7 +2432,7 @@ function openHelp(id){
 const TOUR_MAP=[
   ['start','Start here','the orientation path — load-bearing files, must-know decisions, what is in progress'],
   ['overview','Overview','the pulse: counts, the freshest knowledge, what changed last'],
-  ['wiki','Wiki','every lesson & decision as a walkable story, down to the code diff'],
+  ['wiki','Brain','every lesson & decision as a walkable story, down to the code diff'],
   ['tasks','Tasks','open plans & standing instructions, wired to the files they affect'],
   ['git','Git','every commit with the why stamped on it'],
   ['drift','Drift','pinned knowledge the code has since moved away from'],
@@ -2270,53 +2643,107 @@ const T = {}; // tab renderers, lazy
    the radar. pullGen(id) -> 0|1|2|null drives the stepped dot on each row, and it
    re-tiers automatically on every pull. The FIRST ever pull seeds the baseline
    silently (everything is "seen", nothing flashes as new). */
-let PULL_GENS = { commit: [], lesson: [] };   // each: array of Set-like id arrays, newest first
-let _pullSeeded = { commit:false, lesson:false };
+// ONE pull-generation system across all three list kinds (Owner 2026-06-13:
+// "ein system nicht 2 4 5") — commits, lessons AND tasks, so the same NEW /
+// 1-pull-ago / 2-pulls-ago badge shows everywhere you look.
+const PULL_KINDS = ['commit','lesson','task'];
+// PULL_GENS = only the DISPLAYABLE pull generations (max 3: new / 1-ago / 2-ago).
+// _baseline = ids seen at first load — counted as "already seen" so they never
+// flash, but NEVER shown as a tier. Keeping them separate fixes the bug where a
+// fresh seed put every id into gen-0 and flashed everything as "new".
+let PULL_GENS = { commit: [], lesson: [], task: [] };
+let _baseline = { commit: [], lesson: [], task: [] };
+let _pullSeeded = { commit:false, lesson:false, task:false };
 function _pullKey(kind){ return 'recall_pullgens_'+kind+'_'+((DATA&&DATA.repo)||'_')+'_'+((DATA&&DATA.path)||''); }
 function _loadPullGens(){
-  for(const kind of ['commit','lesson']){
+  for(const kind of PULL_KINDS){
     try{ const raw=localStorage.getItem(_pullKey(kind)); const v=raw?JSON.parse(raw):null;
-      if(v&&Array.isArray(v.gens)){ PULL_GENS[kind]=v.gens.map(a=>Array.isArray(a)?a:[]); _pullSeeded[kind]=true; } }
-    catch(e){ PULL_GENS[kind]=[]; }
+      if(v&&Array.isArray(v.gens)){
+        PULL_GENS[kind]=v.gens.map(a=>Array.isArray(a)?a:[]);
+        _baseline[kind]=Array.isArray(v.base)?v.base:[];
+        _pullSeeded[kind]=true;
+      } }
+    catch(e){ PULL_GENS[kind]=[]; _baseline[kind]=[]; }
   }
 }
 function _savePullGens(kind){
-  try{ localStorage.setItem(_pullKey(kind), JSON.stringify({gens:PULL_GENS[kind]})); }catch(e){}
+  try{ localStorage.setItem(_pullKey(kind), JSON.stringify({gens:PULL_GENS[kind], base:_baseline[kind]})); }catch(e){}
 }
 // ids currently present in DATA for each kind
 function _idsNow(kind){
   if(kind==='commit') return ((DATA.git&&DATA.git.commits)||[]).map(c=>c.sha).filter(Boolean);
+  if(kind==='task') return (DATA.tasks||[]).map(t=>'task:'+t.id).filter(Boolean);
   return (DATA.lessons||[]).map(L=>L.sha||('id:'+L.id)).filter(Boolean);
 }
-// the union of every id we have ever recorded across all generations
-function _seenSet(kind){ const s=new Set(); for(const g of PULL_GENS[kind]) for(const id of g) s.add(id); return s; }
-/* record one pull. On first ever call for a kind: seed silently (current ids become
-   "already seen", no new flash). Afterwards: ids not in the seen-set are this pull's
-   generation 0; shift older gens down; keep at most 3. */
+// every id we've ever recorded — baseline PLUS all displayed generations
+function _seenSet(kind){ const s=new Set(_baseline[kind]); for(const g of PULL_GENS[kind]) for(const id of g) s.add(id); return s; }
+/* SEED + SHOW-DELTA — runs on page load. Two cases, and the second one is the
+   fix for the Owner-found bug (2026-06-18): startup must SHOW what colleagues did,
+   but must NOT advance a generation (only a manual pull does that).
+   1) First time we ever see this project (no saved baseline): put every current
+      id into the BASELINE (seen, but not a tier → nothing flashes — you have no
+      "last seen" to diff against yet, so everything is the known starting state).
+   2) Later loads (saved baseline exists): any id that is NOT in our seen-set is a
+      colleague's change that landed while we were away. Surface it as gen-0 (red
+      NEW) WITHOUT consuming a pull — we DON'T touch the baseline or shift tiers.
+      This is idempotent across reloads: the same fresh id keeps showing as NEW
+      until YOU manually pull (recordPull), which is the only thing that ages it.
+      The "↑ new" button / a manual pull is what advances the baseline — opening
+      or reloading the page never does (that was the original tier-consuming bug). */
+function seedPullGens(){
+  for(const kind of PULL_KINDS){
+    if(!_pullSeeded[kind]){
+      _baseline[kind]=_idsNow(kind).slice();  // case 1: first ever → all baseline
+      PULL_GENS[kind]=[];                       // no displayed tiers yet
+      _pullSeeded[kind]=true; _savePullGens(kind);
+      continue;
+    }
+    // case 2: we've been here before — show colleague deltas as NEW, don't advance.
+    const seen=_seenSet(kind);
+    const fresh=_idsNow(kind).filter(id=>!seen.has(id));
+    if(!fresh.length) continue;                 // nothing new since we last saw it
+    // merge into the CURRENT gen-0 (idempotent: a reload re-adds the same ids to
+    // gen-0, never to a new generation). De-dupe so reloads don't pile up.
+    const g0=new Set(PULL_GENS[kind][0]||[]);
+    for(const id of fresh) g0.add(id);
+    PULL_GENS[kind][0]=[...g0];
+    _savePullGens(kind);                        // persist the shown delta; baseline UNCHANGED
+  }
+}
+/* record ONE deliberate manual pull: ids not yet seen become this pull's
+   generation 0; EVERY older gen shifts down one; anything past gen 2 falls off
+   (no badge). The shift happens on EVERY pull, even when nothing new arrived —
+   otherwise an entry would stick at "1 pull ago" forever until something new
+   came in (Owner 2026-06-13: "wenn älter als 3 pulls, keine pille mehr"). Then
+   we drop now-empty trailing generations so the array doesn't grow with blanks.
+   Called only by goToNew. */
 function recordPull(kind){
   const now=_idsNow(kind);
-  if(!_pullSeeded[kind]){
-    PULL_GENS[kind]=[ now.slice() ];   // baseline: everything seen, nothing new
-    _pullSeeded[kind]=true; _savePullGens(kind); return;
-  }
+  if(!_pullSeeded[kind]){ _baseline[kind]=now.slice(); PULL_GENS[kind]=[]; _pullSeeded[kind]=true; _savePullGens(kind); return; }
   const seen=_seenSet(kind);
-  const fresh=now.filter(id=>!seen.has(id));
-  if(fresh.length===0) return;          // nothing new → generations unchanged
-  PULL_GENS[kind]=[ fresh, ...PULL_GENS[kind] ].slice(0,3);   // newest first, keep 3
+  const fresh=now.filter(id=>!seen.has(id));        // may be empty — still age the tiers
+  let gens=[ fresh, ...PULL_GENS[kind] ].slice(0,3); // shift down, keep at most 3
+  while(gens.length && gens[gens.length-1].length===0) gens.pop(); // trim trailing empties
+  PULL_GENS[kind]=gens;
   _savePullGens(kind);
 }
-function recordPullAll(){ recordPull('commit'); recordPull('lesson'); }
-// 0 = new this pull, 1 = last pull, 2 = 2 pulls ago, null = older / unseen-but-baseline
+function recordPullAll(){ for(const k of PULL_KINDS) recordPull(k); }
+// 0 = new this pull, 1 = last pull, 2 = 2 pulls ago, null = older / baseline
 function pullGen(kind, id){
   for(let i=0;i<PULL_GENS[kind].length;i++){ if(PULL_GENS[kind][i].includes(id)) return i; }
   return null;
 }
-// the stepped "new" dot for a row — strong → medium → faint over 3 pulls
+/* the stepped "new" badge for a row — a TEXT label on all three tiers (Owner
+   2026-06-13): generation 0 = red NEW, then "1 pull ago", "2 pulls ago",
+   fading. Driven by manual pulls, so it answers "what arrived since I last
+   pulled" — and it no longer shifts just because the page reloaded. */
 function pullDot(kind, id){
   const g=pullGen(kind, id);
   if(g===null||g>2) return '';
-  const lbl=['new','1 pull ago','2 pulls ago'][g];
-  return `<span class="pdot pdot--g${g}" title="arrived ${g===0?'since your last refresh':lbl}">${g===0?'<span class="pdot__txt">new</span>':''}</span>`;
+  const txt=['new','1 pull ago','2 pulls ago'][g];
+  const tip=g===0?'arrived since your last manual pull (the “↑ new” button)'
+    :`arrived ${g} pull${g>1?'s':''} ago — it has been here through ${g} of your refreshes`;
+  return `<span class="pdot pdot--g${g}" title="${esc(tip)}"><span class="pdot__txt">${txt}</span></span>`;
 }
 
 function renderAll(){
@@ -2335,7 +2762,7 @@ T.overview = () => {
       <div class="pbody" style="display:flex;justify-content:center;align-items:flex-start;padding-top:56px">
         <div class="ui-card" style="width:min(620px,94%)">
           <div class="ui-card__header"><div class="ui-card__title">Index ${esc(DATA.repo||'this project')}</div>
-            <div class="ui-card__desc">one pass over the code map, git history and any MEMORY/ADR/docs — it fills the wiki, graph, code map and drift light</div></div>
+            <div class="ui-card__desc">one pass over the code map, git history and any MEMORY/ADR/docs — it fills the brain, graph, code map and drift light</div></div>
           <div class="ui-card__content">
             <div class="ui-kv"><span class="ui-kv__k">Folder</span><span class="ui-kv__v" style="font-family:var(--mono);font-size:12px">${esc(DATA.path||'')}</span></div>
             <div class="ui-kv"><span class="ui-kv__k">Reads</span><span class="ui-kv__v">code map · git history · MEMORY/ADR/docs</span></div>
@@ -2361,29 +2788,38 @@ T.overview = () => {
   const lessonRow = L => {
     const kind=typeKind(L);
     const ic = kind==='code'?'code':(kind==='decision'?'decision':'text');
-    const drift = L.drift==='fresh'?'<span class="ui-badge ui-badge--success">fresh</span>'
-      : L.drift==='committed'?'<span class="ui-badge ui-badge--warn">check</span>'
-      : L.drift==='uncommitted'?'<span class="ui-badge ui-badge--warn">edited</span>':'';
+    const drift = driftBadge(L.drift);
     const lid=L.sha||('id:'+L.id);
+    // sub-line = the STATUS line: time (ago + abs date), like the commit rows on
+    // the right (Owner 2026-06-13). The "why" only shows when it adds something —
+    // for changelog-derived notes L.why is just the title again (e.g. "## …"),
+    // which made the row read as a doubled title with no time. Strip that prefix
+    // and drop the why if it merely repeats the title.
+    const normalize = s => (s||'').replace(/^#+\s*/,'').trim().toLowerCase();
+    const whyAdds = L.why && normalize(L.why)!==normalize(L.title);
+    const lsub = L.ts ? (whyAdds?`${esc(L.why)} · `:'')+when(L.ts) : (whyAdds?esc(L.why):'');
+    // layout (Owner 2026-06-13): drift badge (fresh/check/edited) rides the TITLE
+    // line top-right; the "new / N pulls ago" badge rides the STATUS line
+    // bottom-right. Both right-aligned, stacked → tidier, less width.
     return `<div class="ui-row ui-row--click" onclick="openWiki(${L.id})">
       <span class="ui-row__icon ui-row__icon--${ic}">${icon(ic,16)}</span>
       <span class="ui-row__main">
-        <span class="ui-row__title">${esc(L.title)}</span>
-        <span class="ui-row__sub">${L.why?esc(L.why):(L.ts?when(L.ts):'')}</span>
+        <span class="ui-row__line"><span class="ui-row__title">${esc(L.title)}</span><span class="ui-row__tr">${impBadge(L.imp)}${drift}</span></span>
+        <span class="ui-row__line"><span class="ui-row__sub">${lsub}</span><span class="ui-row__tr">${pullDot('lesson',lid)}</span></span>
       </span>
-      ${drift}${impBadge(L.imp)}${pullDot('lesson',lid)}
       <span class="ui-row__arrow">${icon('arrow',14)}</span></div>`;
   };
   const commitRow = c => {
     const isLesson=(DATA.lessons||[]).some(L=>L.sha===c.sha);
+    // same stacked layout as lessons: sha + "stamped" top-right on the title
+    // line, the "new / N pulls ago" badge bottom-right on the status line.
     return `<div class="ui-row ${c.sha?'ui-row--click':''}" ${c.sha?`onclick="openCommit('${jsStr(c.sha)}')"`:''}>
       <span class="ui-row__icon">${icon('commit',16)}</span>
       <span class="ui-row__main">
-        <span class="ui-row__title">${esc(c.subject||'(no message)')}</span>
-        <span class="ui-row__sub">${c.author?esc(c.author)+' · ':''}${c.ts?when(c.ts):''}</span>
+        <span class="ui-row__line"><span class="ui-row__title">${esc(c.subject||'(no message)')}</span><span class="ui-row__tr">${isLesson?'<span class="ui-badge ui-badge--success">stamped</span>':''}${c.sha?`<span class="ui-row__meta">${esc(c.sha)}</span>`:''}</span></span>
+        <span class="ui-row__line"><span class="ui-row__sub">${c.author?esc(c.author)+' · ':''}${c.ts?when(c.ts):''}</span><span class="ui-row__tr">${c.sha?pullDot('commit',c.sha):''}</span></span>
       </span>
-      ${isLesson?'<span class="ui-badge ui-badge--success">stamped</span>':''}
-      ${c.sha?`<span class="ui-row__meta">${esc(c.sha)}</span>`:''}${c.sha?pullDot('commit',c.sha):''}</div>`;
+      <span class="ui-row__arrow">${icon('arrow',14)}</span></div>`;
   };
   // the bare "0/4" counters were unreadable (owner 2026-06-11) — each row now says
   // what is open: a mini progress bar + "n/m done", or an "open" pill without a checklist
@@ -2398,7 +2834,7 @@ T.overview = () => {
       <span class="ui-row__icon">${icon('task',16)}</span>
       <span class="ui-row__main"><span class="ui-row__title">${esc(t.title)}</span>
         <span class="ui-row__sub">${t.total?`${left} of ${t.total} steps open`:'open task'}</span></span>
-      ${prog}
+      ${pullDot('task','task:'+t.id)}${prog}
       <span class="ui-row__arrow">${icon('arrow',14)}</span></div>`;
   };
 
@@ -2416,9 +2852,12 @@ T.overview = () => {
     : `<div class="ui-row" style="padding:14px 16px"><span class="ui-row__sub">no open tasks — <a onclick="switchTab('tasks')" style="color:var(--primary);cursor:pointer">manage tasks →</a></span></div>`;
 
   // freshness as a real progress bar + key→value legend
-  const fTot=Math.max(1,d.fresh+d.committed+d.uncommitted);
+  // broken (arrow 1) = a claim whose own re-runnable check now FAILS; counted as stale
+  // (not fresh) and called out separately as the loud red when present.
+  const broken=d.broken||0;
+  const fTot=Math.max(1,d.fresh+d.committed+d.uncommitted+broken);
   const freshPct=Math.round(d.fresh/fTot*100);
-  const stale=d.committed+d.uncommitted;
+  const stale=d.committed+d.uncommitted+broken;
 
   setPanel('overview', `
     <div class="phead"><div>
@@ -2447,6 +2886,7 @@ T.overview = () => {
             <div class="ui-progress"><div class="ui-progress__fill" style="width:${freshPct}%"></div></div>
             <div class="ui-kv" style="margin-top:10px"><span class="ui-kv__k">committed-drift</span><span class="ui-kv__v">${d.committed}</span></div>
             <div class="ui-kv"><span class="ui-kv__k">uncommitted-edit</span><span class="ui-kv__v">${d.uncommitted}</span></div>
+            ${broken>0?`<div class="ui-kv"><span class="ui-kv__k" style="color:#dc2626;font-weight:700">🔴 broken claim</span><span class="ui-kv__v" style="color:#dc2626;font-weight:700">${broken}</span></div>`:''}
             <div class="ui-kv"><span class="ui-kv__k">decisions to re-check</span><span class="ui-kv__v" id="ov-stale-n">…</span></div>
             <div class="ui-card__desc" style="margin-top:8px" id="ov-fresh-note">${stale>0?`${stale} note${stale>1?'s':''} may be stale — review →`:'all notes match the code →'}</div>
           </div>
@@ -2511,7 +2951,7 @@ async function probeStaleDecisions(){
     const n=(s.stale||[]).length;
     el.textContent=n;
     const note=document.getElementById('ov-fresh-note');
-    const driftNotes=(DATA.drift&&(DATA.drift.committed+DATA.drift.uncommitted))||0;
+    const driftNotes=(DATA.drift&&(DATA.drift.committed+DATA.drift.uncommitted+(DATA.drift.broken||0)))||0;
     if(note&&driftNotes===0)
       note.textContent=n>0?`${n} decision${n>1?'s':''} drifted from their code — review →`
                           :'all notes match the code →';
@@ -2646,12 +3086,19 @@ function renderWikiList(){
   const src=wikiFiltered();
   el.innerHTML = src.length ? src.map(L=>{
       const ic=typeKind(L);
+      const lid=L.sha||('id:'+L.id);   // same id form as the overview pull tiers
+      // four tidy lines (Owner 2026-06-13): 1) headline  2) who + file + edges
+      // 3) time + the "new / pulls-ago" badge (right)  4) the rest of the icons
+      // (drift state · what-it-touches · tags). Headline a touch smaller so the
+      // whole card breathes.
+      const line2 = `${L.author?esc(L.author)+' · ':''}${L.file?filePathChip(L.file,{plain:true}):'—'} · ${L.edges.length} edge${L.edges.length===1?'':'s'}`;
+      const line4 = [driftBadge(L.drift), touchesBadge(L), tagPills(L.tags)].filter(Boolean).join('');
       return `<div class="wiki__entry clickable ${L.id===wikiSel?'sel':''}" onclick="selWiki(${L.id})">
-      <div class="we-top"><span class="ui-row__icon ui-row__icon--${ic}">${icon(ic,15)}</span>
+      <div class="we-l1"><span class="ui-row__icon ui-row__icon--${ic}">${icon(ic,15)}</span>
         <span class="we-title">${esc(L.title)}</span>${impBadge(L.imp)}</div>
-      ${tagPills(L.tags)?`<div style="display:flex;gap:5px;flex-wrap:wrap;margin:7px 0 0 34px">${tagPills(L.tags)}</div>`:''}
-      <div class="m" style="margin-left:34px">${L.author?esc(L.author)+' · ':''}${L.file?filePathChip(L.file,{plain:true}):'—'} · ${L.edges.length} edges · ${L.ts?ago(L.ts):L.drift}</div>
-      ${touchesBadge(L)?`<div class="m" style="margin-top:5px;margin-left:34px">${touchesBadge(L)}</div>`:''}</div>`;
+      <div class="we-l2">${line2}</div>
+      <div class="we-l3"><span class="we-time">${L.ts?when(L.ts):''}</span><span class="we-l3__tr">${pullDot('lesson',lid)}</span></div>
+      ${line4?`<div class="we-l4">${line4}</div>`:''}</div>`;
     }).join('')
     : `<div class="ui-row"><span class="ui-row__sub" style="padding:14px 16px">no lessons match the filter${wikiQuery?` "${esc(wikiQuery)}"`:''}</span></div>`;
 }
@@ -2678,9 +3125,32 @@ function filePathChip(file, opts){
 }
 
 /* ===== STORY PATH — the decision chain (the heart of "follow along") ===== */
+// mirror of engine._split_headline: a too-long title with no body is one wall of text. Split
+// it at the first sentence boundary for DISPLAY so legacy notes (stamped before the engine
+// split landed) read as headline + detail too — without a re-index. Pure cut, no rephrasing.
+function splitHeadline(title){
+  const t=(title||'').trim();
+  if(t.length<=120) return [t, ''];
+  // sentence-end only (NOT ':', which introduces content -> stub headline); first break
+  // that leaves a sane-length headline (>=25, <=240). Mirrors engine._split_headline.
+  const re=/[.!?]\s+/g; let m;
+  while((m=re.exec(t))){
+    const head=t.slice(0, m.index+1).trim();
+    if(head.length<18) continue;
+    if(head.length>240) break;
+    return [head, t.slice(m.index+m[0].length).trim()];
+  }
+  return [t, ''];
+}
 function renderWikiRead(){
   const el=document.getElementById('wiki-read'); if(!el) return;
   const L=DATA.lessons.find(x=>x.id===wikiSel)||DATA.lessons[0]; if(!L){el.innerHTML='';return;}
+  // display title/body: if a long title carries everything (no body), split it so the
+  // headline and the detail each appear ONCE in the chain, never the same paragraph twice.
+  let dispTitle=L.title, dispBody=L.body;
+  if((!dispBody||!String(dispBody).trim()) && (L.title||'').length>120){
+    const [h,r]=splitHeadline(L.title); if(r){ dispTitle=h; dispBody=r; }
+  }
 
   // who points AT this lesson? (the "request / what led here" — incoming edges)
   const incoming=DATA.lessons.filter(o=>o.id!==L.id && (o.edges||[]).some(e=>e.id===L.id))
@@ -2695,7 +3165,8 @@ function renderWikiRead(){
     || (isCodeFile(L.file)?{file:L.file,line:null,title:L.file}:null)
     || (L.file?{file:L.file,line:null,title:L.file,isSource:true}:null);
 
-  const driftWord = L.drift==='committed' ? 'the file changed since this was stamped'
+  const driftWord = L.drift==='broken' ? 'this claim’s own check now FAILS — the code no longer matches it'
+    : L.drift==='committed' ? 'the file changed since this was stamped'
     : L.drift==='uncommitted' ? 'the file has open edits right now'
     : 'still fresh against HEAD';
 
@@ -2707,26 +3178,40 @@ function renderWikiRead(){
         <div class="step__body"><div class="step__k ${kcls||''}">${k}</div>${inner}</div>
       </div></div>`;
 
-  let html = `<div class="secnum" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">entry #${L.id} ${kindPill(typeKind(L))} ${badge(L.drift)} ${impBadge(L.imp)} ${L.ts?`<span>· stamped ${when(L.ts)}</span>`:''} ${L.sha?`<span>· sha ${L.sha}</span>`:''} ${L.author?`<span>· by ${esc(L.author)}</span>`:''}</div>
-    <h1>${esc(L.title)}</h1>
+  // the freshness/predicate state is META — "does this still hold?" — so it rides as a
+  // VALIDITY badge in the header (with driftWord as the hover explanation), NOT as a step
+  // in the causal chain. The chain ends in the Conclusion (what was learned). (Owner 2026-06-15.)
+  let html = `<div class="secnum" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">entry #${L.id} ${kindPill(typeKind(L))} <span title="${esc(driftWord)}">${badge(L.drift)}</span> ${impBadge(L.imp)} ${L.ts?`<span>· stamped ${when(L.ts)}</span>`:''} ${L.sha?`<span>· sha ${L.sha}</span>`:''} ${L.author?`<span>· by ${esc(L.author)}</span>`:''}</div>
+    <h1>${esc(dispTitle)}</h1>
     ${tagPills(L.tags)?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 4px">${tagPills(L.tags)}</div>`:''}`;
 
-  // (8) excerpt + jump-to-full-note: titles are often cryptic and the full note sits
-  // far below the whole story chain. Show the first ~2 sentences right under the title,
-  // with a link that scrolls straight to the full note (no long scroll to find it).
-  const hasFullNote = L.body && L.body!==L.why;
+  // excerpt under the headline — the detail, ONCE. Only when dispBody says something the
+  // headline doesn't (after the split, head and rest are distinct by construction). The full
+  // note at the bottom is the same text in full; the excerpt is the teaser + jump link.
+  const _norm = s => (s||'').replace(/[#*`>\s]+/g,' ').trim().toLowerCase();
+  const hasFullNote = dispBody && _norm(dispBody)!==_norm(dispTitle);
   if(hasFullNote){
-    const plain=L.body.replace(/[#*`>\-]/g,' ').replace(/\s+/g,' ').trim();
+    const plain=String(dispBody).replace(/[#*`>\-]/g,' ').replace(/\s+/g,' ').trim();
     const excerpt=plain.length>220 ? plain.slice(0,220).replace(/\s+\S*$/,'')+'…' : plain;
-    html += `<div class="excerpt">${esc(excerpt)}
-      <a class="excerpt__jump" onclick="document.getElementById('full-note')?.scrollIntoView({behavior:'smooth',block:'start'})">↓ read the full note</a></div>`;
-  } else if(L.why){
-    html += `<div class="excerpt">${esc(L.why)}</div>`;
+    html += `<div class="excerpt">${esc(excerpt)}${plain.length>220?`
+      <a class="excerpt__jump" onclick="document.getElementById('full-note')?.scrollIntoView({behavior:'smooth',block:'start'})">↓ read the full note</a>`:''}</div>`;
   }
 
   html += `<div class="story">`;
 
-  // 1 · what led here (incoming) — only if there is one
+  // The CORE chain is ALWAYS the same shape — decision → consequence → code → (file) →
+  // outcome — so a reader scanning many entries learns one fixed layout. We NEVER hide a
+  // core step when it's empty (a missing "2" next to a "3" reads as a bug / lost data, Owner
+  // 2026-06-15); instead it renders with an honest empty-state line. The number is a RUNNING
+  // counter so the digits 1·2·3… never skip. The two genuine SIDE notes — "what led here"
+  // and the predicate check — use ▸/✓ markers (not digits), so they add context without
+  // breaking the numbered sequence and stay conditional.
+  let n = 0;                                   // running step number — never skips
+  const num = () => String(++n);
+  // a quiet empty-state body for a core step that has nothing recorded (honest, not hidden).
+  const empty = msg => `<div class="step__card"><div class="step__empty">${msg}</div></div>`;
+
+  // ▸ side: what led here (incoming) — context, no number; omitted when there is none.
   if(incoming.length){
     const ins=incoming.slice(0,3).map(it=>`<div class="conseq__r" onclick="selWiki(${it.from.id})">
       <span class="ek">${esc(it.kind||'relates')}</span><span class="arr">←</span>
@@ -2734,50 +3219,98 @@ function renderWikiRead(){
     html += step('▸','','What led here','',`<div class="conseq">${ins}</div>`);
   }
 
-  // 2 · the decision + why
-  html += step('1','fill','Decision','',
-    `<div class="step__card"><div class="step__t">${esc(L.title)}</div>
-      ${L.why?`<div class="step__why">${esc(L.why)}</div>`:''}</div>`);
+  // 1 · DECISION. The headline (dispTitle) is the <h1>; this step adds the reasoning (`why`)
+  // when it says something the headline doesn't. Always present so the chain starts at 1 —
+  // when there's no extra reasoning we point back to the headline rather than echo it.
+  const decWhy = (L.why && _norm(L.why)!==_norm(dispTitle)) ? L.why : '';
+  html += step(num(), decWhy?'fill':'', 'Decision','',
+    decWhy ? `<div class="step__card"><div class="step__why">${esc(decWhy)}</div></div>`
+           : empty('the decision is the headline above — no extra reasoning was recorded.'));
 
-  // 3 · consequence (typed outgoing edges, clickable)
+  // 2 · CONSEQUENCE (typed outgoing edges, clickable). Always present; empty-state when the
+  // note has no outgoing relations yet.
   if(out.length){
     const cs=out.map(e=>`<div class="conseq__r" onclick="${isLesson(e.id)?`selWiki(${e.id})`:(e.file?`openCode('${jsStr(e.file)}',${e.line||'null'})`:'')}">
       <span class="ek">${esc(e.kind)}</span><span class="arr">→</span>
       <span class="tg">${esc(e.title||e.file||'')}</span><span class="go-arrow">${isLesson(e.id)?icon('arrow',12):(e.file?icon('ext',12):'')}</span></div>`).join('');
-    html += step('2','fill','Consequence','',`<div class="conseq">${cs}</div>`);
+    html += step(num(),'fill','Consequence','',`<div class="conseq">${cs}</div>`);
+  } else {
+    html += step(num(),'','Consequence','', empty('no consequences linked to this note.'));
   }
 
-  // 4 · the code change / source — before→after diff if we have a sha, else the
-  // current (highlighted) source file. Always shown when the lesson names a file.
+  // 3 · CODE — the change (diff) or the source it points at. Always present; empty-state when
+  // the note names no file at all (a pure decision/lesson with no code anchor).
   if(codeRef && L.sha && !codeRef.isSource){
-    html += step('3','mustard','Code change · before → after','go',
+    html += step(num(),'mustard','Code change · before → after','go',
       `<div id="diffslot"><div class="more">loading diff for ${esc(codeRef.file)} since ${L.sha}…</div></div>`);
   } else if(codeRef){
     const lbl = codeRef.isSource ? 'Source' : 'Referenced code';
-    html += step('3','mustard',`${lbl} · ${esc(codeRef.file)}`,'go',
+    html += step(num(),'mustard',`${lbl} · ${esc(codeRef.file)}`,'go',
       `<div id="codeslot"><div class="more">loading ${esc(codeRef.file)}…</div></div>`);
+  } else {
+    html += step(num(),'','Code','', empty('this note isn’t pinned to a file — no code change to show.'));
   }
 
-  // 4b · what this file touches — the pre-edit briefing folded into the story (Owner:
-  // "exactly this presentation is brilliant"). The wiki tells the WHY (steps 1–3); the
-  // briefing tells the BLAST RADIUS: what breaks if you change this file, what it leans
-  // on, its symbols, open tasks on it. Lazy-loaded from /api/brief (0 tokens, ADR-014),
-  // and only when the lesson actually names a file to brief.
+  // 4 · WHAT THIS FILE TOUCHES — the pre-edit briefing folded in (blast radius / deps /
+  // symbols / impact / precedent). Only when the note names a file; uses the next number so
+  // the sequence stays contiguous when it IS shown.
   if(codeRef && codeRef.file){
-    html += step('4','mustard','What this file touches','go',
+    html += step(num(),'mustard','What this file touches','go',
       `<div id="storybrief"><div class="more">reading what ${esc(codeRef.file)} touches…</div></div>`);
   }
 
-  // 5 · result (freshness)
-  html += step('✓', L.drift==='fresh'?'fill':'mustard','Result','',
-    `<div class="step__card"><div class="result-line">${badge(L.drift)} <span class="step__why">${driftWord}</span></div></div>`);
+  // 4c · blast radius + experience layers (rich brief). Each is lazy-loaded with the
+  // briefing (loadStoryBrief fills #storybrief, which now also renders impact/precedent),
+  // so nothing extra is wired here — see renderStoryBrief. The predicate check is a
+  // property of THIS note, so it renders synchronously below.
+
+  // ✓ side: PREDICATE CHECK (arrow 1) — only when this note carries a re-runnable check.
+  // Uses a 🟢/🔴 marker (not a number) so it adds the strongest signal — recall didn't just
+  // remember the claim, it RE-VERIFIED it — without breaking the numbered chain.
+  if(L.predicate){
+    const broken = L.drift==='broken';
+    const verdictTxt = broken
+      ? `🔴 the check FAILS now — the code no longer matches this claim`
+      : `🟢 recall re-checked this claim against the live code — it still holds`;
+    html += step(broken?'🔴':'🟢', broken?'':'fill',
+      `Predicate check · ${broken?'broken':'holds'}`, '',
+      `<div class="step__card"><div class="result-line"><code class="pred">${esc(L.predicate)}</code></div>
+        <div class="step__why">${verdictTxt}</div></div>`);
+  }
+
+  // ★ · OUTCOME — the real end of the chain. The Decision (title) is "what was decided";
+  // the Outcome is what CAME of it — a SEPARATE recorded fact (nodes.outcome, v9), never the
+  // title re-worded. Owner 2026-06-15: it must make sense as DATA for the AI first; we only
+  // translate it for humans here — so we show the FIELD, we do NOT interpret body/edges into
+  // a guessed conclusion ("noch weniger interpretieren"). When no outcome was recorded, we
+  // say exactly that — plus only the hard, factual state signals (drift/broken), which are
+  // measured, not inferred. An empty chain end is honest; a fabricated one is a lie.
+  let outBody, outDot, outCls;
+  if(L.outcome){
+    outBody = `<div class="conclusion">${mdToHtml(L.outcome)}</div>`;
+    outDot = '★'; outCls = 'fill';
+  } else {
+    // no recorded outcome — state only the measured facts, never a guessed lesson.
+    const fact = L.drift==='broken' ? '🔴 its own check now fails — the code no longer matches this claim'
+      : L.drift==='committed' ? 'the code drifted since this was stamped'
+      : L.drift==='uncommitted' ? 'the file has open edits right now'
+      : null;
+    // Addressed to the human READER, not a CLI task for them: explain that the AI records
+    // the outcome, automatically, when a later commit/stamp captures how it turned out — so
+    // an empty outcome reads as "not yet" (the honest state), never "you forgot to type this".
+    outBody = `<div class="step__why">The AI hasn’t recorded an outcome for this one yet${fact?` — but the live state shows: ${fact}`:''}.
+      <span class="more" style="display:block;margin-top:6px">recall fills this in on its own when a later commit or note captures how it turned out — nothing for you to do.</span></div>`;
+    outDot = L.drift==='broken' ? '🔴' : '·'; outCls = L.drift==='broken' ? '' : 'mustard';
+  }
+  html += step(outDot, outCls, 'Outcome · what came of it','',
+    `<div class="step__card">${outBody}</div>`, true);
 
   html += `</div>`; // .story
 
   // detail: anchors + body, below the chain
   const chips=(L.anchors||[]).map(a=>`<span class="chip">${esc(a)}</span>`).join('');
   html += `<p class="lbl" style="margin-top:8px">Anchors it answers</p><div class="chips">${chips||'—'}</div>`;
-  if(hasFullNote) html += `<p class="lbl" id="full-note">Full note</p><div class="body md">${mdToHtml(L.body)}</div>`;
+  if(hasFullNote) html += `<p class="lbl" id="full-note">Full note</p><div class="body md">${mdToHtml(dispBody)}</div>`;
 
   el.innerHTML=html; el.scrollTop=0;
 
@@ -2815,27 +3348,64 @@ function renderStoryBrief(b){
   // why rows: a lesson/ADR jumps to its wiki entry; a commit is shown but not clickable.
   const whyRows=why.slice(0,8).map(w=>{
     const open = isLesson(w.node_id) ? `onclick="selWiki(${w.node_id})"` : '';
-    const drift = (w.drift==='committed'||w.drift==='uncommitted') ? `<span class="bf-stale">⚠ stale</span>` : '';
+    const drift = w.drift==='broken' ? `<span class="bf-stale" style="color:#dc2626">🔴 broken</span>`
+      : (w.drift==='committed'||w.drift==='uncommitted') ? `<span class="bf-stale">⚠ stale</span>` : '';
     return `<div class="bf-row ${open?'clickable':''}" ${open}>${kindPill(w.kind==='commit'?'commit':(w.kind==='task'?'task':(/ADR|decision/i.test(w.kind)?'decision':'text')))}<span class="bf-t">${esc(w.title)}</span>${drift}${w.sha?`<span class="bf-kind">${esc(w.sha)}</span>`:''}${open?`<span class="bf-arrow bf-out">${icon('arrow',12)}</span>`:''}</div>`;
   }).join('');
   const breakRows=breaks.slice(0,12).map(x=>
     `<div class="bf-row bf-row--warn clickable" onclick="openFileInViewer('${jsStr(x.file)}',null)"><span class="bf-arrow bf-in">${icon('arrow',12)}</span><span class="bf-t mono">${esc(x.file)}</span><span class="bf-kind">${esc(x.kind)}</span></div>`).join('');
   const depRows=deps.slice(0,12).map(d=>
     `<div class="bf-row clickable" onclick="openFileInViewer('${jsStr(d.target)}',null)"><span class="bf-arrow bf-out">${icon('arrow',12)}</span><span class="bf-t mono">${esc(d.target)}</span><span class="bf-kind">${esc(d.kind)}</span></div>`).join('');
+  // IMPACT (rich brief): the precise blast radius — co-change + structural dependents fused,
+  // weighted by importance. Richer than the bare `breaks` list: it says HOW entangled and
+  // flags landmines/drift on each impacted file. Empty -> section omitted.
+  const impact=(b.impact||[]);
+  const impactRows=impact.slice(0,8).map(x=>{
+    const tags=[x.co_change?`co-changed ×${x.co_change}`:'', x.struct_hop?`imports hop ${x.struct_hop}`:'', x.landmine?'☡ landmine':''].filter(Boolean).join(' · ');
+    return `<div class="bf-row bf-row--warn clickable" onclick="openFileInViewer('${jsStr(x.file)}',null)"><span class="bf-arrow bf-in">${icon('arrow',12)}</span><span class="bf-t mono">${esc(x.file)}</span><span class="bf-kind">${esc(tags||'related')}</span></div>`;
+  }).join('');
+  // PRECEDENT (rich brief): have we faced an analogous situation before? Each carries its
+  // OUTCOME (superseded / became-landmine / drift) — the experience an indexer can't have.
+  const prec=(b.precedent||[]);
+  const precRows=prec.slice(0,3).map(p=>{
+    const out=[p.superseded_by?'↻ later superseded':'', p.became_landmine?'☡ became a landmine':'', p.drift&&p.drift!=='fresh'?'⚠ code moved since':''].filter(Boolean).join(' · ');
+    const open=isLesson(p.node_id)?`onclick="selWiki(${p.node_id})"`:'';
+    return `<div class="bf-row ${open?'clickable':''}" ${open}>${kindPill(/decision|ADR/i.test(p.kind)?'decision':'text')}<span class="bf-t">${esc(p.title)}</span>${out?`<span class="bf-kind">${esc(out)}</span>`:''}${open?`<span class="bf-arrow bf-out">${icon('arrow',12)}</span>`:''}</div>`;
+  }).join('');
   const sec=(title,rows,note,warn)=> rows? `<div class="bf-sec"><div class="bf-h${warn?' bf-h--warn':''}">${title}${note?`<span class="bf-note">${note}</span>`:''}</div>${rows}</div>`:'';
+  // "+N weitere" instead of a silent cut (Owner: the bare 'top 8' read as a truncated list
+  // with a "komisches Ende"). A small, honest count of what's not shown.
+  const more=(shown,total)=> total>shown? `+${total-shown} weitere` : '';
   const symNames=syms.slice(0,18).map(s=>s.symbol).filter(Boolean);  // guard: never render "null"
   const symLine=symNames.length? `<div class="bf-sec"><div class="bf-h">symbols</div><div class="bf-syms">${symNames.map(s=>`<span class="bf-sym">${esc(s)}</span>`).join('')}${syms.length>18?`<span class="bf-more">+${syms.length-18}</span>`:''}</div></div>`:'';
   return `<div class="bf-body bf-body--story">
     ${sec(`${icon('task',12)} open tasks — standing intent on this file`, taskRows)}
-    ${sec(`${icon('text',12)} other knowledge on this file`, whyRows, why.length>8?`top 8 of ${why.length}`:'')}
-    ${sec(`${icon('warn',12)} <b>!</b> what breaks if you change it`, breakRows, breaks.length>12?`top 12 of ${breaks.length}`:'', true)}
-    ${sec(`${icon('ext',12)} what it leans on`, depRows, deps.length>12?`top 12 of ${deps.length}`:'')}
+    ${sec(`${icon('text',12)} other knowledge on this file`, whyRows, more(8, why.length))}
+    ${sec(`${icon('warn',12)} <b>!</b> blast radius — what this change can reach`, impactRows, more(8, impact.length), true)}
+    ${sec(`${icon('warn',12)} <b>!</b> what breaks if you change it`, breakRows, more(12, breaks.length), true)}
+    ${sec(`${icon('decision',12)} precedent — have we been here before?`, precRows, more(3, prec.length))}
+    ${sec(`${icon('ext',12)} what it leans on`, depRows, more(12, deps.length))}
     ${symLine}
     ${b.file?`<div class="bf-foot">${filePathChip(b.file)} <span class="more" style="display:inline">— open the full briefing in the viewer</span></div>`:''}
   </div>`;
 }
 function selWiki(id){ wikiSel=id; renderWikiList(); renderWikiRead(); }
-function openWiki(id){ wikiSel=id; switchTab('wiki'); }
+/* open a wikilink target. A numeric id → the wiki entry (legacy callers). A NAME
+   (from a [[name]] link) → resolve to a TASK by its file slug, else a LESSON by
+   title, and open the right surface. */
+function openWiki(ref){
+  if(typeof ref==='number' || /^\d+$/.test(ref)){ wikiSel=+ref; switchTab('wiki'); return; }
+  const name=String(ref||'').trim().toLowerCase();
+  const slug=s=>String(s||'').toLowerCase().replace(/^.*\//,'').replace(/\.md$/,'');
+  // 1) a task whose file slug matches (e.g. [[dashboard-ui-consistency-pass]])
+  const t=(DATA&&DATA.tasks||[]).find(x=>slug(x.file)===name || slug(x.title)===name);
+  if(t){ switchTab('tasks'); setTimeout(()=>openTaskModal(t.id),60); return; }
+  // 2) a lesson whose title matches
+  const L=(DATA&&DATA.lessons||[]).find(x=>String(x.title||'').toLowerCase().trim()===name);
+  if(L){ wikiSel=L.id; switchTab('wiki'); return; }
+  // 3) nothing found — go to search with the name so the user can still find it
+  switchTab('tasks');
+}
 /* ---- diff loader + renderer (self-built, +/- coloured) ---- */
 const _diffCache={}, _fileCache={};
 // wrap long lines at spaces by default (no horizontal scroll); user can toggle off.
@@ -2931,7 +3501,7 @@ async function _renderCommit(sha){
   let ov=document.getElementById('file-overlay');
   if(!ov){ ov=document.createElement('div'); ov.id='file-overlay';
     ov.style.cssText='position:fixed;inset:0;background:rgba(14,14,14,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:36px';
-    ov.onclick=e=>{ if(e.target===ov) navClose(); }; document.body.appendChild(ov); }
+    document.body.appendChild(ov); }  /* no click-outside-close: ✕ + Escape only (Owner QoL 2026-06-13) */
   ov.innerHTML=`<div class="commit-modal">${navCrumb()}<div class="commit-head">
       <div><div class="secnum">commit ${esc(sha)}</div><h2 id="cm-subj">loading…</h2></div>
     </div><div class="commit-body" id="cm-body"><div class="more">loading the changes…</div></div></div>`;
@@ -3022,6 +3592,17 @@ function codeFilesView(){
 function impBadge(v){ const n=Math.round(v||0); if(n<=0) return '';
   const t=n>=67?'hi':(n>=34?'mid':'lo');
   return `<span class="imp ${t}" title="causal importance ${n}/100 — how much of the system leans on this">${n}</span>`; }
+/* THE one drift badge, with an explaining tooltip (Owner 2026-06-13: "bei allen
+   pillen brauchen wir ein hover, was bedeutet fresh etc."). fresh = the note
+   still matches the code; check = the file changed in git since (committed
+   drift); edited = you have uncommitted edits to it right now. */
+function driftBadge(drift){
+  if(drift==='fresh') return `<span class="ui-badge ui-badge--success" title="fresh — this note still matches the code (nothing changed since it was written)">fresh</span>`;
+  if(drift==='broken') return `<span class="ui-badge" style="background:#fee2e2;color:#dc2626;border-color:transparent;font-weight:700" title="broken — this note carries a re-runnable check, and the check now FAILS: the code no longer matches the claim">🔴 broken</span>`;
+  if(drift==='committed') return `<span class="ui-badge ui-badge--warn" title="check — the file changed in git since this note was written; it may be out of date">check</span>`;
+  if(drift==='uncommitted') return `<span class="ui-badge ui-badge--warn" title="edited — you have uncommitted edits to this file right now, so the note may no longer match">edited</span>`;
+  return '';
+}
 /* inline SVG icon set — NO emojis (they render differently per OS). 14px, currentColor so
    each icon inherits the colour of the pill/element it sits in. One <symbol>-free helper. */
 const SVG={
@@ -3039,7 +3620,7 @@ const SVG={
 };
 function icon(name, sz){ const s=sz||14; return `<svg class="ic-svg" width="${s}" height="${s}" viewBox="0 0 16 16" aria-hidden="true" style="vertical-align:-2px;flex:none">${SVG[name]||SVG.text}</svg>`; }
 /* a small coloured status dot (replaces the 🟢🟡🟠 emoji traffic-lights). */
-function dot(level){ const c=level==='fresh'?'var(--success)':level==='committed'?'var(--warning)':level==='uncommitted'?'var(--oxblood)':'var(--mute-2)';
+function dot(level){ const c=level==='fresh'?'var(--success)':level==='committed'?'var(--warning)':level==='uncommitted'?'var(--oxblood)':level==='broken'?'#dc2626':'var(--mute-2)';
   return `<span class="sdot" style="background:${c}"></span>`; }
 const KIND_META={ code:{label:'code'}, text:{label:'text'}, decision:{label:'decision'},
   task:{label:'task'}, commit:{label:'commit'}, lesson:{label:'text'}, doc:{label:'doc'} };
@@ -3167,14 +3748,20 @@ function flipChip(t){
   if(!looks) return '';
   return `<span class="task-flip">${icon('check',11)} all ${t.total} steps resolved — looks finished: set <b>status: done</b> (or drop/defer) in the file</span>`;
 }
-/* the sub-task checklist (read-only mirror of the markdown `- [ ]` items) */
+/* the sub-task checklist (read-only mirror of the markdown `- [ ]` items).
+   Each RESOLVED step shows who did it + when, from git blame on that line — so on a
+   task several people worked, you see who closed which step. */
 function subtaskList(subs){
   if(!subs||!subs.length) return '';
   const st=s=>s.state||(s.done?'done':'open');
   const box={done:()=>icon('check',11), dropped:()=>'–', moved:()=>'→', open:()=>''};
+  const credit=(s,k)=>{
+    if(k==='open' || !s.by) return '';
+    return `<span class="st-by">${esc(s.by)}${s.at?' · '+fmtDate(s.at):''}</span>`;
+  };
   return `<ul class="subtasks">${subs.map(s=>{const k=st(s);return `<li class="is-${k}">
     <span class="st-box">${box[k]?box[k]():''}</span>
-    <span class="st-txt">${esc(s.text)}</span></li>`;}).join('')}</ul>`;
+    <span class="st-main"><span class="st-txt">${esc(s.text)}</span>${credit(s,k)}</span></li>`;}).join('')}</ul>`;
 }
 function taskCard(t){
   const aff=(t.affects||[]).map(f=>`<span class="task-aff clickable" onclick="event.stopPropagation();openFileInViewer('${jsStr(f)}',null)">${esc(f)}</span>`).join('');
@@ -3182,7 +3769,7 @@ function taskCard(t){
     <div class="task-card__top">
       <span class="task-st ${esc(t.status)}">${esc(t.status)}</span>
       ${kindPill('task', t.task_kind||'task')}
-      <span class="task-card__title">${esc(t.title)}</span>${impBadge(t.imp)}</div>
+      <span class="task-card__title">${esc(t.title)}</span>${impBadge(t.imp)}${pullDot('task','task:'+t.id)}</div>
     ${t.why?`<div class="task-card__why">${esc(t.why)}</div>`:''}
     ${progBar(t)}${unresolvedChip(t)}${flipChip(t)}
     ${aff?`<div class="task-card__aff">${aff}</div>`:''}
@@ -3204,7 +3791,7 @@ function _renderTaskModal(t){
   let ov=document.getElementById('file-overlay');
   if(!ov){ ov=document.createElement('div'); ov.id='file-overlay';
     ov.style.cssText='position:fixed;inset:0;background:rgba(14,14,14,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:40px';
-    ov.onclick=e=>{ if(e.target===ov) navClose(); }; document.body.appendChild(ov); }
+    document.body.appendChild(ov); }  /* no click-outside-close: ✕ + Escape only (Owner QoL 2026-06-13) */
   const aff=(t.affects||[]).map(f=>`<span class="task-aff clickable" onclick="openFileInViewer('${jsStr(f)}',null)">${esc(f)}</span>`).join('');
   ov.innerHTML=`<div class="modalbox" style="width:min(760px,93vw);height:auto;max-height:84vh">
     ${navCrumb()}
@@ -3389,7 +3976,7 @@ function _renderFileViewer(file, line){
   let ov=document.getElementById('file-overlay');
   if(!ov){ ov=document.createElement('div'); ov.id='file-overlay';
     ov.style.cssText='position:fixed;inset:0;background:rgba(14,14,14,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:40px';
-    ov.onclick=e=>{ if(e.target===ov) navClose(); }; document.body.appendChild(ov); }
+    document.body.appendChild(ov); }  /* no click-outside-close: ✕ + Escape only (Owner QoL 2026-06-13) */
   ov.innerHTML=`<div class="modalbox" style="width:min(900px,92vw);height:80vh">
     ${navCrumb()}
     <div class="cvhead" style="display:flex;justify-content:space-between;align-items:center">
@@ -3425,7 +4012,8 @@ function renderBrief(b){
         deps=(b.depends_on||[]), syms=(b.symbols||[]);
   if(!tasks.length && !why.length && !breaks.length && !deps.length) return '';
   // headline counts on the always-visible bar, so the value is legible while collapsed
-  const drift=b.drift==='uncommitted'?`${dot('uncommitted')} edited`
+  const drift=b.drift==='broken'?`${dot('broken')} 🔴 broken — check fails`
+             :b.drift==='uncommitted'?`${dot('uncommitted')} edited`
              :b.drift==='committed'?`${dot('committed')} changed since stamped`:'';
   const chips=[
     tasks.length?`<b>${tasks.length}</b> open task${tasks.length>1?'s':''}`:'',
@@ -3437,7 +4025,7 @@ function renderBrief(b){
   const taskRows=tasks.map(t=>
     `<div class="bf-row clickable" onclick="openTaskModal(${t.node_id})">${kindPill('task')}<span class="bf-t">${esc(t.title)}</span><span class="task-st ${esc(t.status)}">${esc(t.status)}</span></div>`).join('');
   const whyRows=why.map(w=>{
-    const stale=(w.drift==='committed'||w.drift==='uncommitted')?` ${badge(w.drift)}`:'';
+    const stale=(w.drift==='committed'||w.drift==='uncommitted'||w.drift==='broken')?` ${badge(w.drift)}`:'';
     const click=w.sha?`onclick="openCommit('${jsStr(w.sha)}')"`:'';
     return `<div class="bf-row${w.sha?' clickable':''}" ${click}>${kindPill(w.kind==='commit'?'commit':(w.kind==='decision'?'decision':'text'))}<span class="bf-t">${esc(w.title)}${stale}</span>${w.sha?`<span class="sha">${esc(w.sha)}</span>`:''}</div>`;
   }).join('');
@@ -3466,7 +4054,7 @@ function _renderDriftDiff(file, sha){
   let ov=document.getElementById('file-overlay');
   if(!ov){ ov=document.createElement('div'); ov.id='file-overlay';
     ov.style.cssText='position:fixed;inset:0;background:rgba(14,14,14,.5);z-index:50;display:flex;align-items:center;justify-content:center;padding:40px';
-    ov.onclick=e=>{ if(e.target===ov) navClose(); }; document.body.appendChild(ov); }
+    document.body.appendChild(ov); }  /* no click-outside-close: ✕ + Escape only (Owner QoL 2026-06-13) */
   ov.innerHTML=`<div class="modalbox" style="width:min(960px,94vw);height:82vh">
     ${navCrumb()}
     <div class="cvhead"><span>${esc(file)} · changed since ${esc(sha)}</span>
@@ -3529,7 +4117,7 @@ function openConnectModal(pick){
   let ov=document.getElementById('connect-overlay');
   if(!ov){ ov=document.createElement('div'); ov.id='connect-overlay';
     ov.style.cssText='position:fixed;inset:0;background:rgba(14,14,14,.5);z-index:60;display:flex;align-items:center;justify-content:center;padding:40px';
-    ov.onclick=e=>{ if(e.target===ov) ov.remove(); }; document.body.appendChild(ov); }
+    document.body.appendChild(ov); }  /* no click-outside-close: ✕ + Escape only (Owner QoL 2026-06-13) */
   _renderConnectModal();
 }
 function _renderConnectModal(){
@@ -3602,27 +4190,229 @@ function connSummary(){
    ships with the CLI gate wave, and the UI says so honestly. */
 let LIC = null;  // decoded payload {email, plan, trial, exp, days_left, expired} or null
 async function loadLicense(){
-  try{ const r=await fetch('/api/license'); const d=await r.json(); LIC=d.signed_in?d.license:null; }
-  catch(e){ LIC=null; }
+  // Only an EXPLICIT answer from the local server changes the gate. A transient hiccup
+  // (server busy, momentary connection refused) must NOT wipe a valid session and pop the
+  // full-screen login cover — that was the "gate opens by itself again and again" bug
+  // (owner 2026-06-16). On error we keep the current LIC and leave the gate as-is.
+  try{
+    const r=await fetch('/api/license');
+    if(!r.ok) return;                 // server error → keep current state, don't gate
+    const d=await r.json();
+    LIC = d.signed_in ? d.license : null;   // explicit verdict only
+  }catch(e){ return; }                // network/parse hiccup → keep current state
+  applyLoginGate();
   if(document.getElementById('panel-account') && typeof T.account==='function') T.account();
 }
+/* Show the full-screen login gate whenever there is no valid license, hide it once
+   signed in. An expired token (LIC.expired) still gates — the person must sign in
+   again to continue (owner 2026-06-14).
+   reason 'kicked'/'expired' shows the "signed out" banner; it survives a reload via
+   sessionStorage (the heartbeat clears the token then the page reloads). */
+function applyLoginGate(reason){
+  const gate=document.getElementById('login-gate');
+  if(!gate) return;
+  // Mirror the canonical predicate (login.py is_licensed / dashboard.py _dash_licensed):
+  // verified AND not expired AND not pending. The old `!!LIC && !LIC.expired` ignored
+  // pending+verified, so a pending signup auto-key dismissed the gate on a token the CLI
+  // gate and the server both refuse (bug-hunt #1, 2026-06-17). save_license now also
+  // refuses pending, so this is defence-in-depth, not the only guard.
+  const ok = !!LIC && LIC.verified === true && !LIC.expired && !LIC.pending;
+  gate.hidden = ok;
+  // keep the page from scrolling behind the cover, and block tab/click on what's under it
+  document.body.style.overflow = ok ? '' : 'hidden';
+  const kick=document.getElementById('gate-kick');
+  if(kick){
+    if(ok){ try{ sessionStorage.removeItem('recall-gate-kick'); }catch(e){} kick.hidden=true; }
+    else {
+      if(reason==='kicked'){ try{ sessionStorage.setItem('recall-gate-kick','1'); }catch(e){} }
+      let kicked=reason==='kicked';
+      if(!kicked){ try{ kicked = sessionStorage.getItem('recall-gate-kick')==='1'; }catch(e){} }
+      kick.hidden=!kicked;
+    }
+  }
+}
+/* The gate's own login — same device flow as the Account tab, but it drives the
+   gate's button/message and dismisses the cover on success. */
+let _gatePoll=null;
+async function gateLogin(){
+  const msg=document.getElementById('gate-msg');
+  const btn=document.getElementById('gate-btn');
+  if(msg) msg.textContent='';
+  if(btn){ btn.disabled=true; btn.textContent='Opening browser…'; }
+  let start;
+  try{
+    const r=await fetch('/api/account-login',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    start=await r.json();
+    if(!r.ok){ if(msg) msg.textContent=start.error||'Could not start login.'; resetGateBtn(); return; }
+  }catch(e){ if(msg) msg.textContent='Local server not reachable.'; resetGateBtn(); return; }
+  if(start.verification_uri_complete) window.open(start.verification_uri_complete,'_blank','noopener');
+  if(msg) msg.innerHTML='Confirm in the browser (code <b>'+(start.user_code||'')+'</b>)… <a href="'+(start.verification_uri_complete||'#')+'" target="_blank" rel="noopener">open browser again</a>';
+  if(btn) btn.textContent='Waiting for confirmation…';
+  const code=start.device_code, started=Date.now();
+  clearInterval(_gatePoll);
+  _gatePoll=setInterval(async ()=>{
+    if(Date.now()-started > (start.expires_in||600)*1000){ clearInterval(_gatePoll); if(msg) msg.textContent='Timed out — please click “Login” again.'; resetGateBtn(); return; }
+    try{
+      const pr=await fetch('/api/account-login-poll',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_code:code})});
+      const pd=await pr.json();
+      if(pd.status==='ok'){ clearInterval(_gatePoll); LIC=pd.license; onSignedIn(); return; }
+      if(pd.status==='denied'||pd.status==='expired'){ clearInterval(_gatePoll); if(msg) msg.textContent='Login cancelled — please click “Login” again.'; resetGateBtn(); }
+    }catch(e){ /* keep polling — transient */ }
+  }, (start.interval||5)*1000);
+}
+function resetGateBtn(){ const b=document.getElementById('gate-btn'); if(b){ b.disabled=false; b.textContent='Login'; } }
+async function gateSaveToken(){
+  const t=(document.getElementById('gate-token')||{}).value||'';
+  const msg=document.getElementById('gate-token-msg');
+  if(!t.trim()){ if(msg) msg.textContent='Paste a token.'; return; }
+  try{
+    const r=await fetch('/api/license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t})});
+    const d=await r.json();
+    if(!r.ok){ if(msg) msg.textContent=d.error||'Could not save token.'; return; }
+    LIC=d.license; onSignedIn();
+  }catch(e){ if(msg) msg.textContent='Lokaler Server nicht erreichbar.'; }
+}
+/* common post-sign-in: drop the gate and boot the dashboard if it hasn't booted
+   yet (first login of the session), else just refresh the account tab. */
+function onSignedIn(){
+  applyLoginGate();
+  startSeatCheck();   // begin the 60-min single-device heartbeat
+  if(!_appBooted){ bootApp(); return; }
+  if(typeof T.account==='function' && document.getElementById('panel-account')) T.account();
+}
+
+/* SINGLE-DEVICE ENFORCEMENT (owner 2026-06-14): one active device per seat.
+   Every 60 minutes (best-effort) the server confirms THIS device still holds the seat.
+   DEVELOPER-FRIENDLY online check (owner 2026-06-16: "wenn der check fehlschlägt, kommt
+   oben im header eine nachricht … you get logged out in 60 minuten. und ein timer startet
+   … button reconnect. das ist human"):
+     - active:true,  reason 'ok'      → confirmed, hide the ribbon, keep working
+     - active:true,  reason 'grace'   → check failing but grace_left>0: show the header
+        ribbon with a live countdown + Reconnect button; the dev KEEPS WORKING
+     - active:false, reason 'kicked'  → another device took it → log out now
+     - active:false, reason 'expired' → grace ran out → log out (sign in again)
+   The local server runs the throttled (≤1×/60min) check; we just reflect its verdict. */
+let _seatTimer=null, _seatCountdown=null, _graceDeadline=null;
+const SEAT_CHECK_MS=60*60*1000;
+function _fmtCountdown(sec){
+  sec=Math.max(0,Math.floor(sec));
+  const m=Math.floor(sec/60), s=sec%60;
+  return m+':'+String(s).padStart(2,'0');
+}
+function showSeatWarn(graceLeftSec){
+  const bar=document.getElementById('seat-warn'); if(!bar) return;
+  // anchor the deadline once, then tick locally so the timer is smooth between polls
+  if(graceLeftSec!=null) _graceDeadline=Date.now()+graceLeftSec*1000;
+  bar.hidden=false;
+  const tick=()=>{
+    const left=_graceDeadline!=null?(_graceDeadline-Date.now())/1000:0;
+    const el=document.getElementById('seat-warn-timer'); if(el) el.textContent=_fmtCountdown(left);
+    // At 0:00 the displayed deadline is the REAL enforcement point — fire the server
+    // check NOW instead of silently stopping the timer (bug-hunt LOW, 2026-06-17).
+    // The old tick only cleared the interval, so actual logout lagged the visible
+    // countdown by up to one fixed 60-min poll: seat_check_if_due() then returns
+    // SEAT_EXPIRED and clears the token at the right moment. Guard against re-entry
+    // by nulling the interval first.
+    if(left<=0){ clearInterval(_seatCountdown); _seatCountdown=null; seatCheck(); }
+  };
+  if(_seatCountdown) clearInterval(_seatCountdown);
+  tick(); _seatCountdown=setInterval(tick,1000);
+}
+function hideSeatWarn(){
+  const bar=document.getElementById('seat-warn'); if(bar) bar.hidden=true;
+  if(_seatCountdown){ clearInterval(_seatCountdown); _seatCountdown=null; }
+  _graceDeadline=null;
+}
+async function seatCheck(){
+  if(!LIC) return;
+  try{
+    const r=await fetch('/api/license-check');
+    if(!r.ok) return;                       // local-server error → stay as-is, keep working
+    const d=await r.json();
+    if(d && d.active===false){              // kicked OR grace expired → sign out
+      hideSeatWarn(); LIC=null;
+      applyLoginGate(d.reason==='kicked'?'kicked':'expired');
+    } else if(d && d.reason==='grace'){     // offline but still in the grace window
+      showSeatWarn(d.grace_left);
+    } else {                                // confirmed → all good
+      hideSeatWarn();
+    }
+  }catch(e){ /* couldn't even reach the LOCAL server — leave UI as-is */ }
+}
+function startSeatCheck(){
+  if(_seatTimer) return;
+  // Run one check shortly after boot, not only after the first full hour (bug-hunt LOW,
+  // 2026-06-17): a session that resumes mid-grace must learn its true state promptly
+  // rather than keeping full access until the first 60-min poll fires. The server check
+  // is itself throttled to ≤1×/60min, so this leading call is cheap and idempotent.
+  setTimeout(seatCheck, 4000);
+  _seatTimer=setInterval(seatCheck, SEAT_CHECK_MS);
+}
+/* Reconnect button on the ribbon: force an immediate seat check. If we're back online
+   the server confirms the seat and clears the grace; the ribbon disappears. If still
+   offline, the countdown keeps running. */
+async function reconnectSeat(){
+  const btn=document.getElementById('seat-warn-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Reconnecting…'; }
+  try{ await seatCheck(); }catch(e){}
+  if(btn){ btn.disabled=false; btn.textContent='Reconnect'; }
+}
+// ONE login button → browser opens whatever-recall.com, the user signs in HIS way
+// (email/password OR Google/GitHub/Discord — all work), confirms, and the local
+// server polls until done, then stores the signed token. After that the engine
+// confirms the seat with a brief online check about once an hour (owner 2026-06-16:
+// "es sind alle 60 minuten"). Owner 2026-06-14: "wir loggen uns online ein … was ist
+// mit den google und git usern" — the browser flow covers every provider.
+let _loginPoll=null;
+async function doAccountLogin(){
+  const msg=document.getElementById('lg-msg');
+  const btn=document.getElementById('lg-btn');
+  if(msg) msg.textContent='';
+  if(btn){ btn.disabled=true; btn.textContent='Opening browser…'; }
+  let start;
+  try{
+    const r=await fetch('/api/account-login',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    start=await r.json();
+    if(!r.ok){ if(msg) msg.textContent=start.error||'Login konnte nicht gestartet werden.'; resetLoginBtn(); return; }
+  }catch(e){ if(msg) msg.textContent='Local server not reachable.'; resetLoginBtn(); return; }
+  // open the browser at the prefilled activation URL (all providers live there)
+  if(start.verification_uri_complete) window.open(start.verification_uri_complete,'_blank','noopener');
+  if(msg) msg.innerHTML='Confirm in the browser (code <b>'+(start.user_code||'')+'</b>)… <a href="'+(start.verification_uri_complete||'#')+'" target="_blank" rel="noopener" style="color:var(--gold-ink)">open browser again</a>';
+  if(btn) btn.textContent='Warte auf Bestätigung…';
+  // poll the local server (it forwards to the web poll with the device_code secret)
+  const code=start.device_code, started=Date.now();
+  clearInterval(_loginPoll);
+  _loginPoll=setInterval(async ()=>{
+    if(Date.now()-started > (start.expires_in||600)*1000){ clearInterval(_loginPoll); if(msg) msg.textContent='Timed out — please click “Login” again.'; resetLoginBtn(); return; }
+    try{
+      const pr=await fetch('/api/account-login-poll',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_code:code})});
+      const pd=await pr.json();
+      if(pd.status==='ok'){ clearInterval(_loginPoll); LIC=pd.license; T.account(); return; }
+      if(pd.status==='denied'||pd.status==='expired'){ clearInterval(_loginPoll); if(msg) msg.textContent='Login cancelled — please click “Login” again.'; resetLoginBtn(); }
+    }catch(e){ /* keep polling — transient */ }
+  }, (start.interval||5)*1000);
+}
+function resetLoginBtn(){ const b=document.getElementById('lg-btn'); if(b){ b.disabled=false; b.textContent='Login'; } }
+// (the in-tool plan picker was removed — plans/prices live ONLY on the website +
+// billing page; the tool just links out to "Manage plan & billing". Owner 2026-06-16.)
+// emergency manual paste (CI / headless, no browser) — unchanged path
 async function saveLicenseToken(){
   const t=(document.getElementById('lic-token')||{}).value||'';
   const msg=document.getElementById('lic-msg');
-  if(!t.trim()){ if(msg) msg.textContent='paste a token first'; return; }
+  if(!t.trim()){ if(msg) msg.textContent='Paste a token.'; return; }
   try{
     const r=await fetch('/api/license',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({token:t})});
     const d=await r.json();
-    if(!r.ok){ if(msg) msg.textContent=d.error||'could not save the token'; return; }
+    if(!r.ok){ if(msg) msg.textContent=d.error||'Could not save token.'; return; }
     LIC=d.license;
-  }catch(e){ if(msg) msg.textContent='could not reach the local server'; return; }
+  }catch(e){ if(msg) msg.textContent='Local server not reachable.'; return; }
   T.account();
 }
 async function signOutLicense(){
   try{ await fetch('/api/license',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({action:'clear'})}); }catch(e){}
-  LIC=null; T.account();
+  LIC=null; applyLoginGate(); T.account();
 }
 /* re-render any open tab that shows the connection, so it reflects the new state */
 function refreshConnectionViews(){
@@ -3724,7 +4514,9 @@ T.drift = () => {
     const action = (r.drift==='committed' && r.sha)
       ? `openDriftDiff('${jsStr(r.file)}','${jsStr(r.sha)}')`
       : `openCode('${jsStr(r.file)}',null)`;
-    const todo = r.drift==='committed'
+    const todo = r.drift==='broken'
+      ? '🔴 this note’s own check FAILS — the code no longer matches the claim; fix the code or update the note'
+      : r.drift==='committed'
       ? 'the file changed in git since this note — open the diff and check the note still holds'
       : 'you have unsaved edits to this file — the note may already be out of date';
     return `<div class="item" onclick="${action}" title="open the change">
@@ -3879,6 +4671,10 @@ T.howitworks = () => {
       <div class="lead-wrap"><div class="lead">write-time intelligence — the meaning is stamped when the author knows it, not guessed at read time</div></div></div>
     <div class="pbody">
 
+      <a class="hiw-docs" href="https://whatever-recall.com/docs" target="_blank" rel="noopener">
+        📖 Read the full documentation online at <b>whatever-recall.com/docs</b> — every command &amp; concept, kept current. <span class="hiw-docs__arr">→</span>
+      </a>
+
       <div class="ui-card" style="margin-bottom:16px"><div class="ui-card__content">
         <div class="ui-card__desc" style="font-size:13px;line-height:1.6">recall builds a local index of your repo — a graph of decisions, lessons and code symbols — so an AI (or you) can ask <em>"why is this the way it is?"</em> and get the answer with its reasoning, in milliseconds, without re-reading the whole tree. It lives in <code>.mind/index.db</code> inside the project: deploy-safe, reproducible, yours.</div>
       </div></div>
@@ -3903,10 +4699,10 @@ T.howitworks = () => {
         <div class="ui-card__header"><div class="ui-card__title">Why it compounds</div>
           <div class="ui-card__desc">the value curve is superlinear — team × project × time</div></div>
         <div class="ui-card__content"><div class="ui-grid ui-grid--2">
-        ${fact('Every commit makes it smarter','Each commit auto-stamps its knowledge (post-commit hook / file watcher), wires co-change edges and recomputes which code is load-bearing. You never "maintain" the wiki — working on the code IS maintaining it. The longer a project lives, the more its memory knows.')}
+        ${fact('Every commit makes it smarter','Each commit auto-stamps its knowledge (post-commit hook / file watcher), wires co-change edges and recomputes which code is load-bearing. You never "maintain" the brain — working on the code IS maintaining it. The longer a project lives, the more its memory knows.')}
         ${fact('More people — faster, not messier',"Every teammate's commits feed the same graph: decisions, gotchas and blast radii accumulate across the whole team. A new dev (or a fresh AI session) onboards from the collected memory in one <code>recall explain</code> instead of asking around. Most tools get noisier with team size; this one gets sharper.")}
         ${fact('No external tools to keep in sync','Plans, roadmaps and tasks are markdown files in the repo (<code>.recall/tasks/</code>) — versioned in git, wired to the files they affect, surfaced automatically the moment anyone touches those files. No Notion/Confluence/Jira island that drifts away from reality the week after it was written.')}
-        ${fact('Always current — the code is the source of truth','All knowledge is derived from and pinned to the repo (git SHAs). When the code moves, the drift light says so — the wiki cannot silently lie, because it is not a copy of the truth, it lives where the truth lives.')}
+        ${fact('Always current — the code is the source of truth','All knowledge is derived from and pinned to the repo (git SHAs). When the code moves, the drift light says so — the brain cannot silently lie, because it is not a copy of the truth, it lives where the truth lives.')}
         </div></div>
       </div>
 
@@ -4008,6 +4804,12 @@ T.about = () => {
         <div class="ui-card__content"><div class="about-links" id="about-links"></div></div>
       </div>
 
+      <div class="ui-card" style="margin-top:16px">
+        <div class="ui-card__header"><div class="ui-card__title">Built with</div>
+          <div class="ui-card__desc">the stack recall and its site are built on</div></div>
+        <div class="ui-card__content"><div class="about-built" id="about-built"></div></div>
+      </div>
+
     </div>`);
   const head = () => { const el=document.getElementById('about-head'); if(!el || !ABOUT) return;
     // the company name links home (owner: "mccain digital bitte noch verlinken")
@@ -4032,8 +4834,30 @@ T.about = () => {
     if(ABOUT.discord_url) html += `<a class="about-link" href="${esc(ABOUT.discord_url)}" target="_blank" rel="noopener">${DC}<span>Discord</span></a>`;
     if(!html) html = '<span class="muted" style="font-size:13px">community links not configured in this install</span>';
     el.innerHTML = html; };
-  if(ABOUT){ head(); links(); return; }
-  fetch('/api/about').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{ ABOUT=d; head(); links(); })
+  // the "Built with" strip — same list/order as the website footer. Marks are
+  // inline SVG (no external request, the offline rule). Affiliate links carry
+  // rel="sponsored". Data comes from /api/about so the URLs live in one place.
+  const BW_MARK = (name) => {
+    switch(name){
+      case 'Python': return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M11.9 2c-1.9 0-3.3.2-4 .8-.6.5-.9 1.2-.9 2v1.6h5v.6H4.6c-1.5 0-2.6 1-2.9 2.6-.3 1.7-.3 2.8 0 4.5.3 1.5 1.1 2.5 2.6 2.5h1.5v-2c0-1.6 1.4-3 3-3h4.3c1.3 0 2.4-1.1 2.4-2.4V4.8c0-1.3-1.1-2.3-2.4-2.5-.7-.2-1.6-.3-2.2-.3Zm-2.7 1.5c.5 0 .9.4.9.9s-.4.9-.9.9-.9-.4-.9-.9.4-.9.9-.9Z" fill="#3776AB"/><path d="M12.1 22c1.9 0 3.3-.2 4-.8.6-.5.9-1.2.9-2v-1.6h-5v-.6h7.4c1.5 0 2.6-1 2.9-2.6.3-1.7.3-2.8 0-4.5-.3-1.5-1.1-2.5-2.6-2.5h-1.5v2c0 1.6-1.4 3-3 3H11c-1.3 0-2.4 1.1-2.4 2.4v3.9c0 1.3 1.1 2.3 2.4 2.5.7.2 1.6.3 2.2.3Zm2.7-1.5c-.5 0-.9-.4-.9-.9s.4-.9.9-.9.9.4.9.9-.4.9-.9.9Z" fill="#FFD43B"/></svg>';
+      case 'Vercel': return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3 L22 20 H2 Z" fill="#fff"/></svg>';
+      case 'Supabase': return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M13.2 1.5c.5 0 .8.6.5 1L8.2 9.7c-.3.4 0 1 .5 1H13v10.3c0 .8-1 1.1-1.5.5L2.9 9.6c-.4-.5-.1-1.3.6-1.3H7V1.9c0-.2.2-.4.4-.4Z" fill="#3ECF8E"/></svg>';
+      case 'Claude Code': return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="#D97757"><rect x="11" y="2" width="2" height="6" rx="1"/><rect x="11" y="16" width="2" height="6" rx="1"/><rect x="2" y="11" width="6" height="2" rx="1"/><rect x="16" y="11" width="6" height="2" rx="1"/><rect x="4.6" y="5.2" width="2" height="6" rx="1" transform="rotate(-45 5.6 8.2)"/><rect x="17.4" y="12.8" width="2" height="6" rx="1" transform="rotate(-45 18.4 15.8)"/><rect x="5.6" y="12.8" width="6" height="2" rx="1" transform="rotate(-45 8.6 13.8)"/><rect x="12.4" y="9.2" width="6" height="2" rx="1" transform="rotate(-45 15.4 10.2)"/></g></svg>';
+      case 'Next.js': return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#fff"/><path d="M9 7.5v9 M9 7.5 L16.5 17 M15.6 7.5v6.5" stroke="#111" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>';
+      case 'React': return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="none" stroke="#61DAFB" stroke-width="1.2"><ellipse cx="12" cy="12" rx="10" ry="4"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(120 12 12)"/></g><circle cx="12" cy="12" r="1.8" fill="#61DAFB"/></svg>';
+      case 'TypeScript': return '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="3" fill="#3178C6"/><text x="12" y="16.5" text-anchor="middle" font-size="10" font-weight="700" font-family="ui-sans-serif,system-ui,sans-serif" fill="#fff">TS</text></svg>';
+      default: return '';
+    }
+  };
+  const built = () => { const el=document.getElementById('about-built'); if(!el || !ABOUT) return;
+    const items = Array.isArray(ABOUT.built_with) ? ABOUT.built_with : [];
+    if(!items.length){ el.innerHTML = '<span class="muted" style="font-size:13px">—</span>'; return; }
+    el.innerHTML = items.map(b =>
+      `<a class="about-built__item" href="${esc(b.url)}" target="_blank" rel="${b.affiliate?'sponsored noopener':'noopener'}" title="${esc(b.name)}">${BW_MARK(b.name)}<span>${esc(b.name)}</span></a>`
+    ).join('');
+  };
+  if(ABOUT){ head(); links(); built(); return; }
+  fetch('/api/about').then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{ ABOUT=d; head(); links(); built(); })
     .catch(()=>{ const el=document.getElementById('about-head'); if(el) el.textContent='could not load product info'; });
 };
 
@@ -4172,7 +4996,7 @@ T.power = () => {
 let HOOK = null;  // {has_git, installed, path, pre_commit, pre_commit_path} — git hook status
 function liveBlock(){
   const liveTxt = LIVE_ON
-    ? `<b>On.</b> When you commit, the dashboard re-indexes on its own — the wiki, graph and drift light update without a reload, and a toast tells you what landed.`
+    ? `<b>On.</b> When you commit, the dashboard re-indexes on its own — the brain, graph and drift light update without a reload, and a toast tells you what landed.`
     : `<b>Off</b> (started with <code>--no-watch</code>). The dashboard is a passive viewer; restart without that flag for live mode.`;
   const hookKnown = HOOK!==null;
   const noGit = hookKnown && !HOOK.has_git;
@@ -4236,44 +5060,374 @@ async function loadRulesStatus(){
   catch(e){ RULES_OK=false; }
   renderHealthPills();
 }
-function renderHealthPills(){
-  const host=document.getElementById('health-pills'); if(!host) return;
-  const noGit = HOOK && HOOK.has_git===false;
-  const pill = (on, label, title, onclick, disabled) =>
-    `<button class="hpill ${on?'':'hpill--off'} ${disabled?'':''}" ${disabled?'disabled':''}
-       title="${esc(title)}" ${onclick?`onclick="${onclick}"`:''}>
-       <span class="hpill__dot"></span>${esc(label)}</button>`;
-  // rules.md — injected (green, links to the verbatim file) or unreachable (red).
+/* Collapse the 4 health modes (rules.md · pre-commit · post-commit · mcp) into ONE
+   `connection · n/4` pill. The 4 booleans read the SAME globals as before; only the
+   emit changed. Hover/click opens a read-only status modal (openConnModes) with manual
+   fix hints — no auto-fix (Owner 2026-06-13: the user runs the command and engages with
+   the tool). Any mode off → pill is oxblood + pulses (connPulse), like the new-badge flash. */
+function connModes(){
+  const noGit = !!(HOOK && HOOK.has_git===false);
   const rulesOn = RULES_OK!==false;
-  const rules = pill(rulesOn, 'rules.md',
-    rulesOn ? 'rules.md is injected — the engine loads exactly this file. Click to read it verbatim.'
-            : 'rules.md could not be served by the engine.',
-    "switchTab('howitworks')", false);
-  // the two git hooks — green when installed, red when off; click toggles (warns never blocks).
   const preOn = !!(HOOK && HOOK.pre_commit);
   const postOn = !!(HOOK && HOOK.installed);
-  const pre = noGit
-    ? pill(false,'pre-commit','no .git in this project — hooks need git',null,true)
-    : pill(preOn,'pre-commit',
-        preOn ? 'pre-commit warning is ON — recall warns before risky commits (never blocks). Click to remove.'
-              : 'pre-commit warning is OFF. Click to install — it warns before load-bearing commits, never blocks.',
-        "toggleHookPill(event,'pre')", false);
-  const post = noGit
-    ? pill(false,'post-commit','no .git in this project — hooks need git',null,true)
-    : pill(postOn,'post-commit',
-        postOn ? 'post-commit auto-stamp is ON — every commit with Recall-* trailers is stamped. Click to remove.'
-               : 'post-commit auto-stamp is OFF. Click to install — auto-stamps trailers, offline.',
-        "toggleHookPill(event,'post')", false);
-  // MCP registration (ADR-029) — green when .mcp.json carries the recall server; the
-  // tooltip adds honest USE evidence (access_log consumer='mcp'), not just file-exists.
   const mcpOn = !!(MCPST && MCPST.registered);
-  const used = (MCPST && MCPST.last_used) ? ` Last used ${ago(MCPST.last_used)}.` : '';
-  const mcp = pill(mcpOn, 'mcp',
-    mcpOn ? `MCP is ON — recall appears as native tools (recall · brief · stamp …) in Claude/Cursor via the checked-in .mcp.json.${used} Click to unregister.`
-          : 'MCP is OFF. Click to register recall as this project’s MCP server (.mcp.json) — native tools in Claude/Cursor, zero dependencies.',
-    'toggleMcpPill(event)', false);
-  host.innerHTML = rules + pre + post + mcp;
+  return [
+    { key:'rules', name:'rules.md', on:rulesOn, na:false,
+      onWhy:'Injected — the engine loads exactly this file (your governance + the pre-edit gate).',
+      offWhy:'The engine could not serve rules.md. This usually means a broken install, not a setting.',
+      cmd: rulesOn ? null : 'pip install --force-reinstall whatever-recall',
+      read:true },
+    { key:'pre', name:'pre-commit', on:preOn, na:noGit,
+      onWhy:'ON — recall warns before a load-bearing commit (it never blocks).',
+      offWhy:'OFF — no warning before risky commits. Install it to get a heads-up.',
+      naWhy:'No .git in this project — git hooks need a repository.',
+      cmd: (noGit||preOn) ? null : 'recall hook --install --pre-commit' },
+    { key:'post', name:'post-commit', on:postOn, na:noGit,
+      onWhy:'ON — every commit with Recall-* trailers is auto-stamped, offline.',
+      offWhy:'OFF — commits are not auto-stamped, so the memory stops staying fresh.',
+      naWhy:'No .git in this project — git hooks need a repository.',
+      cmd: (noGit||postOn) ? null : 'recall hook --install' },
+    { key:'mcp', name:'mcp', on:mcpOn, na:false,
+      onWhy:(()=>{ const u=(MCPST&&MCPST.last_used)?` Last used ${ago(MCPST.last_used)}.`:'';
+        return `ON — recall is a native tool set (recall · brief · stamp …) in Claude/Cursor via the checked-in .mcp.json.${u}`; })(),
+      offWhy:'OFF — recall is not registered as this project’s MCP server, so AI clients can’t call it natively. Run the command below, then paste the snippet it prints into your AI client.',
+      cmd: mcpOn ? null : 'recall mcp --print-config' },
+  ];
 }
+function renderHealthPills(){
+  const host=document.getElementById('health-pills'); if(!host) return;
+  const modes = connModes();
+  // a mode counts toward n/4 if it is ON, or genuinely not-applicable (no .git) — an
+  // N/A hook is not a failure, so it shouldn't make the pill red on a non-git project.
+  const ok = (m)=> m.on || m.na;
+  const n = modes.filter(ok).length;
+  const allOk = n===modes.length;
+  host.innerHTML =
+    `<button class="connpill ${allOk?'':'connpill--bad'}" id="connpill"
+       title="connection: ${n}/${modes.length} modes healthy — click for details + manual fixes"
+       onclick="openConnModes()">
+       <span class="connpill__dot"></span>connection · ${n}/${modes.length}</button>`;
+}
+/* read-only status modal for the connection pill. Lists the 4 modes with status + a plain
+   explanation + the manual command to fix it (the user runs it, engaging with the tool).
+   "Re-check" re-queries all three status loaders so green shows after a manual fix.
+   This modal DOES close on click-outside + Escape (only the activity console is X-only).
+   It deliberately uses its OWN overlay id (NOT in the Escape-array at ~2034); a small
+   keydown listener here handles Escape so it stays self-contained. */
+function openConnModes(){
+  let ov=document.getElementById('connmodes-overlay');
+  if(!ov){
+    ov=document.createElement('div'); ov.id='connmodes-overlay';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(14,14,14,.45);z-index:55;display:none;align-items:flex-start;justify-content:center;padding:64px 20px';
+    ov.onclick=(e)=>{ if(e.target===ov) closeConnModes(); };
+    document.body.appendChild(ov);
+    document.addEventListener('keydown',(e)=>{ if(e.key==='Escape' && ov.style.display==='flex') closeConnModes(); });
+  }
+  renderConnModes(ov);
+  ov.style.display='flex';
+}
+function closeConnModes(){ const ov=document.getElementById('connmodes-overlay'); if(ov) ov.style.display='none'; }
+function renderConnModes(ov){
+  const modes=connModes();
+  const okCount=modes.filter(m=>m.on||m.na).length;
+  const rows=modes.map(m=>{
+    const cls = m.na ? 'cmode--na' : (m.on ? 'cmode--on' : 'cmode--off');
+    const state = m.na ? 'n/a' : (m.on ? 'active' : 'off');
+    const why = m.na ? (m.naWhy||'') : (m.on ? m.onWhy : m.offWhy);
+    // the command is COPY-on-click (owner 2026-06-14: deliberately no auto-run —
+    // running it once in the terminal teaches the tool — but a click copies it so
+    // you don't mistype it). Shows "kopiert ✓" briefly.
+    const cmd = m.cmd ? `<button type="button" class="cmode__cmd" title="klicken zum Kopieren — dann im Projekt einfügen" onclick="copyConnCmd(this,'${jsStr(m.cmd)}')"><span class="cmode__cmdtxt">${esc(m.cmd)}</span><span class="cmode__cmdic" aria-hidden="true">⧉</span></button>` : '';
+    const read = (m.read && m.on)
+      ? `<button class="ui-btn ui-btn--ghost ui-btn--sm cmode__act" onclick="closeConnModes();switchTab('howitworks')">read</button>` : '';
+    return `<div class="cmode ${cls}">
+      <span class="cmode__dot"></span>
+      <div>
+        <div class="cmode__name">${esc(m.name)}</div>
+        <div class="cmode__state">${esc(state)}</div>
+        <div class="cmode__why">${esc(why)}</div>${cmd}
+      </div>${read}
+    </div>`;
+  }).join('');
+  ov.innerHTML=`<div class="modalbox" style="width:min(440px,94vw);height:auto;max-height:80vh" onclick="event.stopPropagation()">
+    <div class="cvhead" style="display:flex;justify-content:space-between;align-items:center">
+      <span class="mono" style="font-weight:600">connection · ${okCount}/${modes.length}</span>
+      <button class="nav-x" onclick="closeConnModes()" aria-label="close">✕</button>
+    </div>
+    <div style="padding:14px 20px 18px;overflow:auto;flex:1">
+      <p class="cmode__intro">recall’s four health modes. Anything <b>off</b> you fix yourself with the
+        command shown — then hit <b>re-check</b>. (No auto-fix on purpose: running it once teaches you the tool.)</p>
+      ${rows}
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid var(--hair-2);display:flex;justify-content:flex-end">
+      <button class="ui-btn ui-btn--primary ui-btn--sm" onclick="recheckConnModes(this)">${okCount<modes.length?'activate':'re-check'}</button>
+    </div>
+  </div>`;
+}
+/* copy a fix command to the clipboard (no auto-run — owner: running it yourself
+   teaches the tool). Brief "kopiert ✓" feedback on the clicked chip. */
+async function copyConnCmd(btn, cmd){
+  try{ await navigator.clipboard.writeText(cmd); }
+  catch(e){ /* fallback: select the text node so the user can Ctrl-C */
+    try{ const r=document.createRange(); r.selectNodeContents(btn); const s=getSelection(); s.removeAllRanges(); s.addRange(r); }catch(_){}
+  }
+  const txt=btn.querySelector('.cmode__cmdtxt'), ic=btn.querySelector('.cmode__cmdic');
+  if(txt){ const orig=txt.textContent; btn.classList.add('copied');
+    txt.textContent='kopiert'; if(ic) ic.textContent='✓';
+    setTimeout(()=>{ btn.classList.remove('copied'); txt.textContent=orig; if(ic) ic.textContent='⧉'; }, 1300); }
+}
+async function recheckConnModes(btn){
+  if(btn){ btn.disabled=true; btn.textContent='checking…'; }
+  try{ await Promise.all([loadRulesStatus(), loadHook(), loadMcp()]); }catch(e){}
+  const ov=document.getElementById('connmodes-overlay');
+  if(ov && ov.style.display==='flex') renderConnModes(ov);
+  renderHealthPills();
+}
+
+/* ===== live activity console (v7) — the floating usage proof =====
+   Streams every recall call (brief/recall/explain/stamp) from /api/activity, across CLI +
+   MCP + dashboard (3 processes, one shared .mind DB). Polls ~1.5s (its OWN loop, separate
+   from the calm 30s pulse). Closes ONLY via ✕ — no scrim, immune to Escape/click-outside/
+   tab-change (its id is not in the Escape array). Draggable header, pin (stay-on-top corner),
+   resizable (CSS resize:both). Filters by kind + consumer. Light blinks on new rows.
+   Honest: shows COMMITTED rows with up-to-poll latency, never an in-flight call. */
+// Every read-path action that writes an access_log row. ONE source of truth — the filter UI,
+// the default-on map and the empty-state copy all derive from it, so a new serve (callers,
+// cycles, …) shows up as a selectable filter the moment the engine logs its kind. Keep in sync
+// with the engine's _log(kind=) calls (recall/engine.py code-intelligence section).
+const CON_KINDS = ['recall','brief','explain','stamp','impact','precedent',
+                   'callers','callees','dead_code','untested','cycles'];
+const CON = {
+  open:false, sinceTs:0, timer:null, rows:[], seen:new Set(),
+  kinds:Object.fromEntries(CON_KINDS.map(k=>[k,true])),
+  consumers:{cli:true,mcp:true,dashboard:false},  // default: hide my own dashboard browsing
+  pinned:false, markers:[], lastMarkerActivityTs:0, POLL_MS:1500, MAX:400,
+};
+function _conLoad(){
+  try{ const s=JSON.parse(localStorage.getItem('recall-console')||'{}');
+    if(s.kinds) Object.assign(CON.kinds,s.kinds);
+    if(s.consumers) Object.assign(CON.consumers,s.consumers);
+    if(typeof s.pinned==='boolean') CON.pinned=s.pinned;
+    if(typeof s.openPinned==='boolean') CON._openPinned=s.openPinned;  // was it pinned-open at last save?
+    if(Array.isArray(s.markers)) CON.markers=s.markers.slice(-50);      // reload dividers (ts list, capped)
+    if(typeof s.lastMarkerActivityTs==='number') CON.lastMarkerActivityTs=s.lastMarkerActivityTs;
+    if(s.pos) CON._pos=s.pos; if(s.size) CON._size=s.size;
+  }catch(e){}
+}
+function _conMaybeReopen(){
+  // on page load: if the console was PINNED + open when last saved, reopen it in place.
+  // An unpinned console stays closed on reload (only pin makes it "stick to the screen").
+  _conLoad();
+  if(CON._openPinned){ CON.pinned=true; openConsole(); }
+}
+function _conSave(){
+  const p=document.getElementById('console-panel');
+  const pos = (p && p.style.left) ? {left:p.style.left,top:p.style.top} : CON._pos;
+  const size = (p && p.style.width) ? {w:p.style.width,h:p.style.height} : CON._size;
+  CON._pos = pos; CON._size = size;
+  // openPinned: a PINNED + OPEN console reopens itself on reload (Owner: pin = stays put,
+  // survives reload + tab change, can't be moved). An unpinned console does not auto-reopen.
+  localStorage.setItem('recall-console', JSON.stringify(
+    {kinds:CON.kinds,consumers:CON.consumers,pinned:CON.pinned,pos,size,
+     markers:CON.markers.slice(-50),
+     lastMarkerActivityTs:CON.lastMarkerActivityTs, openPinned: CON.pinned && CON.open}));
+}
+function toggleConsole(){ CON.open ? closeConsole() : openConsole(); }
+function openConsole(){
+  _conLoad();
+  let p=document.getElementById('console-panel');
+  if(!p){ p=document.createElement('div'); p.id='console-panel'; p.className='console-panel';
+    document.body.appendChild(p); _conBuild(p); }
+  // restore geometry (or default to a spot under the header, right side)
+  const pos=CON._pos, size=CON._size;
+  p.style.left = (pos&&pos.left) ? pos.left : (Math.max(12, window.innerWidth-580))+'px';
+  p.style.top  = (pos&&pos.top)  ? pos.top  : '64px';
+  if(size&&size.w) p.style.width=size.w; if(size&&size.h) p.style.height=size.h;
+  p.classList.toggle('pinned', CON.pinned);
+  p.classList.add('on'); CON.open=true;
+  _conSyncFilterUI();
+  // first fill: pull recent history (since=0), then start the fast poll. The shared access_log
+  // always replays on reload — that's honest; a reload divider (not hiding) marks the boundary.
+  // The divider is placed ONCE per page-load (in init via _conReloadDividerOnce), NOT on every
+  // open/close — so reopening the panel in the same session never stacks lines.
+  CON.sinceTs=0; CON.seen.clear(); CON.rows=[];
+  _conPoll(true);
+  if(CON.timer) clearInterval(CON.timer);
+  CON.timer=setInterval(()=>_conPoll(false), CON.POLL_MS);
+  _conSave();  // persist open state so a pinned console reopens on reload
+}
+function closeConsole(){
+  const p=document.getElementById('console-panel');
+  if(p) p.classList.remove('on');
+  if(CON.timer){ clearInterval(CON.timer); CON.timer=null; }
+  CON.open=false; _conSave();
+}
+function _conBuild(p){
+  p.innerHTML=`
+    <div class="con-head" id="con-head">
+      <span class="con-light" id="con-light"></span>
+      <span class="con-title">recall <b>console</b> · live usage <span id="con-count"></span></span>
+      <button class="con-hbtn ${CON.pinned?'on':''}" id="con-pin" title="pin on top / keep position" onclick="conTogglePin()">pin</button>
+      <button class="con-hbtn con-x" title="close (the only way out)" onclick="closeConsole()">✕</button>
+    </div>
+    <div class="con-body">
+      <div class="con-filters">
+        <div class="con-fgrp">action</div>
+        ${CON_KINDS.map(k=>`<label class="con-fopt"><input type="checkbox" data-kind="${k}" onchange="conFilter()"><span class="ck-${k}">${k.replace('_','-')}</span></label>`).join('')}
+        <div class="con-fgrp">source</div>
+        ${['cli','mcp','dashboard'].map(c=>`<label class="con-fopt"><input type="checkbox" data-consumer="${c}" onchange="conFilter()"><span>${c}</span></label>`).join('')}
+      </div>
+      <div class="con-stream" id="con-stream">
+        <div class="con-empty">waiting for recall calls…<br><br>This streams every read-path call — <b>recall · brief ·
+          explain · stamp</b> plus the code-intelligence serves (<b>impact · callers · dead-code · untested · cycles</b>) —
+          from any process sharing this project (CLI · MCP · dashboard). Run <span style="color:#e3c45a">recall brief &lt;file&gt;</span>
+          in a terminal and watch it appear. Shows committed calls (~1.5s poll) — an honest log, not an in-flight tap.</div>
+      </div>
+    </div>`;
+  _conWireDrag(p);
+}
+/* a file clicked INSIDE the console opens the viewer. The modal sits above the console (fixed
+   z-order), so the file is in front automatically — to return to the console, close the modal. */
+function openConsoleFile(path){ openFileInViewer(path, null); }
+function _conSyncFilterUI(){
+  document.querySelectorAll('#console-panel [data-kind]').forEach(cb=>{ cb.checked=!!CON.kinds[cb.dataset.kind]; });
+  document.querySelectorAll('#console-panel [data-consumer]').forEach(cb=>{ cb.checked=!!CON.consumers[cb.dataset.consumer]; });
+}
+function conFilter(){
+  document.querySelectorAll('#console-panel [data-kind]').forEach(cb=>{ CON.kinds[cb.dataset.kind]=cb.checked; });
+  document.querySelectorAll('#console-panel [data-consumer]').forEach(cb=>{ CON.consumers[cb.dataset.consumer]=cb.checked; });
+  _conSave(); _conRender();
+}
+function conTogglePin(){
+  CON.pinned=!CON.pinned;
+  const p=document.getElementById('console-panel'); if(p) p.classList.toggle('pinned',CON.pinned);
+  const b=document.getElementById('con-pin'); if(b) b.classList.toggle('on',CON.pinned);
+  _conSave();
+}
+async function _conReloadDividerOnce(){
+  // Called ONCE per page-load (from init). Drop a single "reloaded" divider — but ONLY if at
+  // least one new call happened since the last divider (Owner: 23 reloads with nothing between
+  // = still ONE line, not 23). We ask the feed for the single newest row and compare its ts to
+  // the stored lastMarkerActivityTs. Equal/older → nothing happened → no new line.
+  _conLoad();
+  try{
+    const r=await fetch('/api/activity?since=0&limit=1', {cache:'no-store'});
+    const d=await r.json();
+    const newest = (d.rows && d.rows.length) ? d.rows[0].ts : 0;
+    const now = (typeof d.now==='number') ? d.now : newest;
+    if(!newest) return;                              // empty log → no divider
+    if(newest <= CON.lastMarkerActivityTs) return;   // no NEW activity since last divider → no line
+    CON.lastMarkerActivityTs = newest;
+    CON.markers.push(now);                           // place the divider at "now" (server clock)
+    CON.markers = CON.markers.slice(-50);
+    _conSave();
+    if(CON.open) _conRender();
+  }catch(e){ /* server down → skip; next load tries again */ }
+}
+async function _conPoll(first){
+  if(!CON.open) return;
+  try{
+    const r=await fetch('/api/activity?since='+CON.sinceTs+'&limit='+(first?CON.MAX:200), {cache:'no-store'});
+    const d=await r.json();
+    if(typeof d.now==='number' && d.now) CON._now=d.now;  // server clock, for the reload-divider stamp
+    if(d.no_index){ return; }
+    const fresh=(d.rows||[]).filter(row=>{ const key=row.ts+'|'+row.kind+'|'+(row.query||'')+'|'+row.consumer;
+      if(CON.seen.has(key)) return false; CON.seen.add(key); return true; });
+    if(fresh.length){
+      // rows come newest-first; keep newest at the top, cap the buffer
+      CON.rows = fresh.concat(CON.rows).slice(0, CON.MAX);
+      CON.sinceTs = Math.max(CON.sinceTs, ...d.rows.map(x=>x.ts));
+      _conRender();
+      if(!first) _conBlink();
+    } else if(first){ _conRender(); }
+    // keep the header light + statusline dot reflecting "connected & listening"
+  }catch(e){ /* server restart etc — next tick recovers */ }
+}
+function _conBlink(){
+  const l=document.getElementById('con-light'); const b=document.getElementById('console-btn-light');
+  [l,b].forEach(el=>{ if(!el) return; el.classList.remove('blink'); void el.offsetWidth; el.classList.add('blink');
+    setTimeout(()=>el.classList.remove('blink'), 650); });
+}
+function _conVisible(row){ return CON.kinds[row.kind]!==false && CON.consumers[row.consumer]!==false; }
+function _conRender(){
+  const stream=document.getElementById('con-stream'); if(!stream) return;
+  const vis=CON.rows.filter(_conVisible);
+  const cnt=document.getElementById('con-count');
+  if(cnt) cnt.innerHTML = vis.length ? `<span class="con-newcount">${vis.length}</span>` : '';
+  if(!vis.length && !CON.markers.length){
+    stream.innerHTML=`<div class="con-empty">no calls match the current filters.<br>
+      Toggle <b>action</b>/<b>source</b> on the left, or run <span style="color:#e3c45a">recall brief &lt;file&gt;</span> in a terminal.</div>`;
+    return;
+  }
+  // merge call-rows and reload-dividers into ONE newest-first stream by ts. A divider only
+  // shows if it sits between/above real rows in the window (its ts is within the buffer's range).
+  const oldest = vis.length ? Math.min(...vis.map(r=>r.ts)) : 0;
+  const items = vis.map(r=>({type:'row', ts:r.ts, r}))
+    .concat(CON.markers.filter(m=>m>=oldest).map(m=>({type:'sep', ts:m})));
+  items.sort((a,b)=> b.ts-a.ts || (a.type==='sep'?-1:1));  // newest first; a divider sits above the row it follows
+  stream.innerHTML = items.map(it=>{
+    if(it.type==='sep'){
+      return `<div class="con-sep" title="${esc(_conStamp(it.ts))}"><span>reloaded · ${esc(ago(it.ts)||'just now')}</span></div>`;
+    }
+    const r=it.r;
+    const t=_conTime(r.ts); const lat = (r.latency_us!=null)? (r.latency_us>=1000?Math.round(r.latency_us/1000)+'ms':r.latency_us+'µs') : '';
+    const q = r.query||'';
+    // brief's query IS the file → make the query itself the clickable file (opens the viewer +
+    // pre-edit briefing, like everywhere else in the tool). For stamp/recall, show the joined
+    // node file as a separate clickable tag when it adds info beyond the query text.
+    const looksLikeFile = s => /[\/.]/.test(s) && /\.(py|ts|tsx|js|jsx|md|html|css|json|sql|mjs|txt|yml|yaml)$/i.test(s);
+    const qIsFile = (r.kind==='brief') || looksLikeFile(q);
+    const qCell = qIsFile
+      ? `<span class="con-row__q con-file" onclick="openConsoleFile('${jsStr(q)}')" title="open ${esc(q)}">${esc(q)}</span>`
+      : `<span class="con-row__q">${esc(q)}</span>`;
+    const file = (r.file && r.file!==q && r.kind!=='brief') ? r.file : '';
+    const fileTag = file
+      ? `<span class="con-row__f con-file" onclick="openConsoleFile('${jsStr(file)}')" title="open ${esc(file)}">${esc(file)}</span>` : '';
+    return `<div class="con-row">
+      <span class="con-row__t">${esc(t)}</span>
+      <span class="con-row__k ck-${esc(r.kind)}">${esc((r.kind||'').replace('_','-'))}</span>
+      <span class="con-row__c">${esc(r.consumer)}</span>
+      ${qCell}${fileTag}
+      <span class="con-row__lat">${esc(lat)}</span>
+    </div>`;
+  }).join('');
+}
+function _conStamp(ts){
+  // full date+time for the divider hover (e.g. "13 Jun 2026, 22:04:11")
+  try{ const d=new Date(ts*1000); const p=n=>String(n).padStart(2,'0');
+    const mo=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+    return `${d.getDate()} ${mo} ${d.getFullYear()}, ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }catch(e){ return ''; }
+}
+function _conTime(ts){
+  // ts is unix seconds (server clock). Render HH:MM:SS local.
+  try{ const d=new Date(ts*1000); const p=n=>String(n).padStart(2,'0');
+    return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }catch(e){ return ''; }
+}
+function _conWireDrag(p){
+  const head=p.querySelector('#con-head'); if(!head) return;
+  let sx=0, sy=0, ox=0, oy=0, dragging=false;
+  head.addEventListener('mousedown',(e)=>{
+    if(CON.pinned) return;                       // pinned = locked in place, no dragging
+    if(e.target.closest('.con-hbtn')) return;    // header buttons aren't drag handles
+    dragging=true; sx=e.clientX; sy=e.clientY;
+    const r=p.getBoundingClientRect(); ox=r.left; oy=r.top;
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove',(e)=>{
+    if(!dragging) return;
+    let nx=ox+(e.clientX-sx), ny=oy+(e.clientY-sy);
+    nx=Math.max(0, Math.min(nx, window.innerWidth - p.offsetWidth));
+    ny=Math.max(0, Math.min(ny, window.innerHeight - 40));
+    p.style.left=nx+'px'; p.style.top=ny+'px';
+  });
+  document.addEventListener('mouseup',()=>{ if(dragging){ dragging=false; _conSave(); } });
+}
+
+/* Modals are classic (Owner: keep it simple): centered, dimmed scrim, NOT draggable. A workspace
+   modal always sits above the console (z 50-60 vs the console's resting 46). Click a file in the
+   console → the modal opens in front; close it (✕ / Escape) to return. Click-outside does NOT
+   close (only ✕ + Escape) — the scrim is there to dim + focus, not to dismiss. */
 async function toggleMcpPill(ev){
   const btn = ev && ev.currentTarget;
   if(btn){ btn.classList.add('hpill--busy'); btn.disabled=true; }
@@ -4384,10 +5538,10 @@ async function pollPower(){
     if(s.state==='done'){
       _powerEnd();
       const res=s.result||{};
-      const dr=await fetch('/api/data'); DATA=await dr.json();  // refresh so wiki/graph show new lessons
+      await fetchData();  // refresh so wiki/graph show new lessons (gate-aware on 402)
       if(typeof T.power==='function') T.power();
       const mm=document.getElementById('power-msg');
-      if(mm){ mm.className='cn-msg ok'; mm.textContent=`✓ run #${res.run} — +${res.nodes_added} lessons, +${res.edges_added} edges, +${res.synonyms_added} synonyms · open the Wiki`; }
+      if(mm){ mm.className='cn-msg ok'; mm.textContent=`✓ run #${res.run} — +${res.nodes_added} lessons, +${res.edges_added} edges, +${res.synonyms_added} synonyms · open the Brain`; }
     } else if(s.state==='error'){
       _powerEnd();
       if(typeof T.power==='function') T.power();
@@ -4418,8 +5572,8 @@ async function indexProject(btn){
     const r=await fetch('/api/index',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     const d=await r.json();
     if(!r.ok||d.error){ setJob(null); alert(d.error||('error '+r.status)); if(btn){ btn.disabled=false; btn.textContent=label; } return; }
-    // reload everything against the now-indexed project
-    const dr=await fetch('/api/data'); DATA=await dr.json();
+    // reload everything against the now-indexed project (gate-aware on 402)
+    await fetchData();
     await loadProjects();
     setJob(null);
     CONTESTED_CACHE=STALE_CACHE=null;  // re-index → re-scan on next Drift open
@@ -4560,49 +5714,70 @@ T.account = () => {
           ${LIC ? `
           <div class="ui-card__header has-action">
             <div class="ui-card__titles"><div class="ui-card__title">Signed in</div>
-              <div class="ui-card__desc">license stored in ~/.recall/license.token — works offline</div></div>
+              <div class="ui-card__desc">your key lives in ~/.recall/license.token — verified offline</div></div>
             ${trialBadge}
           </div>
           <div class="ui-card__content">
-            <div class="ui-kv"><span class="ui-kv__k">Account</span><span class="ui-kv__v">${esc(LIC.email)}</span></div>
+            <div class="ui-kv"><span class="ui-kv__k">Account</span><span class="ui-kv__v">${esc(LIC.name || LIC.email)}</span></div>
+            ${LIC.name?`<div class="ui-kv"><span class="ui-kv__k">Email</span><span class="ui-kv__v">${esc(LIC.email)}</span></div>`:''}
             <div class="ui-kv"><span class="ui-kv__k">Plan</span><span class="ui-kv__v">${esc(LIC.plan)}${LIC.trial?' (14-day trial)':''}</span></div>
-            <div class="ui-kv"><span class="ui-kv__k">Valid until</span><span class="ui-kv__v">${new Date(LIC.exp*1000).toLocaleDateString()}${LIC.expired?' · expired':''}</span></div>
+            <div class="ui-kv"><span class="ui-kv__k">Token valid until</span><span class="ui-kv__v">${new Date(LIC.exp*1000).toLocaleDateString('en-US')}${LIC.expired?' · expired':''}</span></div>
             ${LIC.expired ? `
-            <div class="ui-card__desc" style="margin-top:10px">This token has expired — <a href="https://whatever-recall.com/account" target="_blank" rel="noopener" style="color:var(--gold-ink);text-decoration:underline">issue a fresh one</a>${LIC.trial?' or <a href="https://whatever-recall.com/pricing" target="_blank" rel="noopener" style="color:var(--gold-ink);text-decoration:underline">pick a plan</a>':''}.</div>`:''}
+            <div class="ui-card__desc" style="margin-top:10px">Your session has expired — <b>sign out and sign back in</b> once to continue.</div>`:''}
             <hr class="ui-sep" style="margin:12px 0">
-            <button class="ui-btn ui-btn--outline ui-btn--block" onclick="signOutLicense()">Sign out</button>
-            <div class="ui-card__desc" style="margin-top:10px">The payload is decoded locally for display; cryptographic signature enforcement ships with the <code>recall login</code> gate wave — same file, same seam.</div>
+            <button class="ui-btn ui-btn--outline ui-btn--block" onclick="signOutLicense()">Logout</button>
+            <div class="ui-card__desc" style="margin-top:10px">Signed with Ed25519. The engine confirms your seat with a brief online check about once an hour — one active device per seat. Your code never leaves this machine.</div>
           </div>
           ` : `
           <div class="ui-card__header has-action">
-            <div class="ui-card__titles"><div class="ui-card__title">Sign in</div>
-              <div class="ui-card__desc">one paste — then the engine runs fully local</div></div>
+            <div class="ui-card__titles"><div class="ui-card__title">Login</div>
+              <div class="ui-card__desc">one click — your browser opens and you sign in</div></div>
             <span class="ui-badge ui-badge--success ui-card__action">14-day trial · no card</span>
           </div>
           <div class="ui-card__content">
-            <div class="ui-card__desc" style="margin-bottom:10px">
-              1 · <a href="https://whatever-recall.com/account" target="_blank" rel="noopener" style="color:var(--gold-ink);text-decoration:underline">Start your trial at whatever-recall.com/account</a><br>
-              2 · click <b>Issue license token</b> there<br>
-              3 · paste the token here:</div>
-            <label class="ui-label" for="lic-token">License token</label>
-            <textarea class="ui-input" id="lic-token" rows="4" placeholder="eyJzdWIiOi…  .  …signature" style="width:100%;margin:6px 0 12px;font-family:var(--mono);font-size:var(--fs-meta);resize:vertical"></textarea>
-            <button class="ui-btn ui-btn--primary ui-btn--block" onclick="saveLicenseToken()">Save token</button>
-            <div class="ui-card__desc" id="lic-msg" style="margin-top:10px"></div>
+            <button class="ui-btn ui-btn--primary ui-btn--block ui-btn--lg" id="lg-btn" onclick="doAccountLogin()">Login</button>
+            <div class="ui-card__desc" id="lg-msg" style="margin-top:12px;min-height:18px"></div>
+            <div class="ui-card__desc" style="margin-top:6px">
+              Your browser opens whatever-recall.com — sign in with <b>email, Google, GitHub or Discord</b>,
+              confirm, done. No account yet? Just start free there.
+              The engine confirms your seat with a brief <b>online check about once an hour</b> — your code never leaves this machine.
+            </div>
+            <details style="margin-top:14px">
+              <summary style="cursor:pointer;color:var(--muted);font-size:var(--fs-meta)">CI / headless (no browser)? Set the token manually</summary>
+              <div style="margin-top:12px">
+                <div class="ui-card__desc" style="margin-bottom:8px">For CI / headless (no browser): get the token on the website (Account → My license key) and paste it here — or set it as <code class="dash-mono" style="font-family:var(--mono)">RECALL_LICENSE</code>.</div>
+                <textarea class="ui-input" id="lic-token" rows="3" placeholder="eyJzdWIiOi…  .  …signature" style="width:100%;margin:6px 0 12px;font-family:var(--mono);font-size:var(--fs-meta);resize:vertical"></textarea>
+                <button class="ui-btn ui-btn--outline ui-btn--block" onclick="saveLicenseToken()">Save token</button>
+                <div class="ui-card__desc" id="lic-msg" style="margin-top:10px"></div>
+              </div>
+            </details>
           </div>
           `}
         </div>
+        ${(LIC && LIC.role==='owner') ? `
         <div class="ui-card">
-          <div class="ui-card__header"><div class="ui-card__title">Plans</div>
-            <div class="ui-card__desc">same features everywhere — you only choose how many people share the memory</div></div>
+          <div class="ui-card__header"><div class="ui-card__title">Plan &amp; billing</div></div>
           <div class="ui-card__content">
-            <div class="ui-kv"><span class="ui-kv__k">Trial</span><span class="ui-kv__v"><span class="ui-badge ui-badge--success">14 days · every feature · no card</span></span></div>
-            <div class="ui-kv"><span class="ui-kv__k">Solo</span><span class="ui-kv__v">1 seat — $10/mo · $100/yr</span></div>
-            <div class="ui-kv"><span class="ui-kv__k">Team</span><span class="ui-kv__v">up to 10 seats — $100/mo · $800/yr</span></div>
-            <div class="ui-kv"><span class="ui-kv__k">Studio</span><span class="ui-kv__v">up to 25 seats + priority support — $250/mo</span></div>
-            <hr class="ui-sep" style="margin:12px 0">
-            <div class="ui-card__desc"><a href="https://whatever-recall.com/pricing" target="_blank" rel="noopener" style="color:var(--gold-ink);text-decoration:underline">whatever-recall.com/pricing</a> — self-hosted either way: your code and your memory never leave this machine.</div>
+            <div class="ui-card__desc">Every plan has every feature — you only choose how many people share the memory.</div>
+            <a class="ui-btn ui-btn--primary ui-btn--block" style="margin-top:14px" href="https://whatever-recall.com/account" target="_blank" rel="noopener">Manage plan &amp; billing →</a>
+            <div class="ui-card__desc" style="margin-top:10px">Plan changes &amp; payment run securely on whatever-recall.com.</div>
           </div>
         </div>
+        ` : (LIC ? `
+        <div class="ui-card">
+          <div class="ui-card__header"><div class="ui-card__title">Your access</div></div>
+          <div class="ui-card__content">
+            <div class="ui-card__desc">You're a <b>member</b> of your team. The team owner manages plan &amp; billing — you just get to work.</div>
+          </div>
+        </div>
+        ` : `
+        <div class="ui-card">
+          <div class="ui-card__header"><div class="ui-card__title">What is recall?</div></div>
+          <div class="ui-card__content">
+            <div class="ui-card__desc">Your code's memory, living locally. Sign in — 14 days, every feature, no card. After that, priced only by seats.</div>
+          </div>
+        </div>
+        `)}
       </div>
     </div>`);
 };
@@ -4721,7 +5896,119 @@ document.addEventListener('keydown', e=>{
   if(el && el.getAttribute && el.getAttribute('role')==='button' && el.hasAttribute('onclick')){ e.preventDefault(); el.click(); }
 });
 
+/* ---- Build & share settings (what may leave this machine) ---- */
+let BUILD_CFG = null;
+/* The two settings that, when OFF, mean a leak path is open → the button goes red+pulse. */
+function buildIsUnsafe(s){ return s && (s.block_raw_mind_commit===false || s.dry_run_before_export===false); }
+function paintBuildBtn(s){
+  const b=document.getElementById('build-btn'), sh=document.getElementById('build-btn-shield');
+  if(!b) return;
+  const unsafe=buildIsUnsafe(s);
+  b.classList.toggle('proj--alert', !!unsafe);
+  if(sh) sh.textContent = unsafe ? '⚠️' : '🛡️';
+  b.title = unsafe
+    ? 'Build & share — ⚠ a security guard is OFF (private knowledge could leak)'
+    : 'build & share settings — what leaves this machine';
+}
+async function refreshBuildBtn(){
+  try{ const r=await fetch('/api/build-settings'); const d=await r.json(); BUILD_CFG=d.settings; paintBuildBtn(d.settings); }
+  catch(e){ /* leave the button calm on a fetch blip */ }
+}
+/* fail-SAFE defaults: if the API can't be read, NEVER show a guard as OFF (that would
+   look unsafe when it isn't) — assume the safe state (guards ON, team visibility). */
+const BUILD_SAFE = {default_visibility:'team', block_raw_mind_commit:true, dry_run_before_export:true, export_path:'.mind/shared.db', export_exclude:[]};
+function buildMerge(s){ return Object.assign({}, BUILD_SAFE, s||{}); }
+async function openBuildSettings(){
+  let s=null, priv=0;
+  try{
+    const r=await fetch('/api/build-settings');
+    if(r.ok){ const d=await r.json(); s=d.settings; priv=d.private_count||0; }
+  }catch(e){ /* fall through to safe defaults */ }
+  s = buildMerge(s || BUILD_CFG);  // merge over safe defaults — no field is ever undefined
+  BUILD_CFG=s;
+  const d={settings:s, private_count:priv};
+  let ovl=document.getElementById('build-ovl');
+  if(!ovl){ ovl=document.createElement('div'); ovl.id='build-ovl'; ovl.className='build-ovl';
+    ovl.addEventListener('click', e=>{ if(e.target===ovl) closeBuildSettings(); });
+    document.body.appendChild(ovl); }
+  const yn=(v)=>v?'checked':'';
+  ovl.innerHTML = `
+    <div class="build-modal" role="dialog" aria-label="Build & share settings">
+      <div class="build-modal__head">
+        <div><b>Build &amp; share settings</b><div class="build-modal__sub">What may leave this machine. Saved to <code>.recall/config.toml</code> — git-tracked, read by the CLI &amp; the commit hook.</div></div>
+        <button class="build-x" title="close" onclick="closeBuildSettings()">✕</button>
+      </div>
+      <div class="build-grp">🔒 Privacy &amp; sharing</div>
+      <label class="build-row">
+        <span class="build-row__l"><b>Default visibility for new notes</b><span class="build-row__h">Whether a fresh <code>recall stamp</code> can leave in an export, or stays local.</span></span>
+        <select id="bs-vis" class="build-sel">
+          <option value="team" ${s.default_visibility==='team'?'selected':''}>team — shared in an export</option>
+          <option value="private" ${s.default_visibility==='private'?'selected':''}>private — stays on this machine</option>
+        </select>
+      </label>
+      <label class="build-row">
+        <span class="build-row__l"><span class="build-row__t"><b>Block raw <code>.mind</code> commit</b><span class="build-guard">leak guard</span></span><span class="build-row__h">A pre-commit hook refuses to commit a brain that still holds private notes.</span></span>
+        <input type="checkbox" id="bs-block" class="build-tog" ${yn(s.block_raw_mind_commit)}>
+      </label>
+      <label class="build-row">
+        <span class="build-row__l"><span class="build-row__t"><b>Verify private-clean before export</b><span class="build-guard">leak guard</span></span><span class="build-row__h"><code>recall export</code> proves the copy holds zero private notes before writing it.</span></span>
+        <input type="checkbox" id="bs-dry" class="build-tog" ${yn(s.dry_run_before_export)}>
+      </label>
+      <div class="build-grp">Export</div>
+      <label class="build-row">
+        <span class="build-row__l"><b>Shared-brain export path</b><span class="build-row__h">Where <code>recall export</code> writes the shareable, private-free brain.</span></span>
+        <input type="text" id="bs-path" class="build-txt" value="${esc(s.export_path||'.mind/shared.db')}">
+      </label>
+      <div class="build-warn" id="bs-warn" ${buildIsUnsafe(s)?'':'hidden'}>⚠ A leak guard is OFF — private knowledge could leave this machine. Turn it back on unless you really mean to.</div>
+      <div class="build-foot">
+        <span class="build-foot__note">${(d.private_count||0)} note(s) currently private (stay local).</span>
+        <span><button class="ui-btn ui-btn--outline" onclick="closeBuildSettings()">Cancel</button>
+        <button class="ui-btn" id="bs-save" onclick="saveBuildSettings()">Save</button></span>
+      </div>
+    </div>`;
+  ovl.hidden=false;
+  // live-warn as the user toggles, before saving
+  const sync=()=>{ const live={block_raw_mind_commit:document.getElementById('bs-block').checked, dry_run_before_export:document.getElementById('bs-dry').checked};
+    document.getElementById('bs-warn').hidden = !buildIsUnsafe(live); };
+  document.getElementById('bs-block').addEventListener('change', sync);
+  document.getElementById('bs-dry').addEventListener('change', sync);
+}
+function closeBuildSettings(){ const o=document.getElementById('build-ovl'); if(o){ o.hidden=true; o.remove(); } }
+function buildSaveError(msg){
+  const w=document.getElementById('bs-warn');
+  if(w){ w.hidden=false; w.textContent='✗ '+msg; }
+}
+async function saveBuildSettings(){
+  const body={
+    default_visibility: document.getElementById('bs-vis').value,
+    block_raw_mind_commit: document.getElementById('bs-block').checked,
+    dry_run_before_export: document.getElementById('bs-dry').checked,
+    export_path: document.getElementById('bs-path').value.trim() || '.mind/shared.db',
+  };
+  const btn=document.getElementById('bs-save');
+  const reset=()=>{ if(btn){ btn.disabled=false; btn.textContent='Save'; } };
+  if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+  try{
+    const r=await fetch('/api/build-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok){
+      // a 404 means the server is on old code (restart it); any other code is a real error
+      reset();
+      buildSaveError(r.status===404
+        ? 'the server needs a restart to enable saving — run `recall stop` then `recall dashboard`.'
+        : ('save failed (HTTP '+r.status+'). Try again.'));
+      return;
+    }
+    const d=await r.json();
+    if(d && d.ok){ BUILD_CFG=d.settings; paintBuildBtn(d.settings); closeBuildSettings(); }
+    else { reset(); buildSaveError((d && d.error) ? d.error : 'save was refused.'); }
+  }catch(e){
+    reset();
+    buildSaveError('could not reach the dashboard server (is it still running?).');
+  }
+}
+
 load();
+refreshBuildBtn();
 </script>
 </body>
 </html>

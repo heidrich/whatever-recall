@@ -263,28 +263,18 @@ def test_openai_compat_unreachable_raises_clean_runtimeerror(monkeypatch):
 
 # ─────────────────────────────────────────── license file permissions (LC1)
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes only")
-def test_license_token_is_written_owner_only(tmp_path, monkeypatch):
+def test_license_token_is_written_owner_only(tmp_path, monkeypatch, signed_token):
     import recall.license as lic
 
     path = tmp_path / ".recall" / "license.token"
     monkeypatch.setattr(lic, "LICENSE_PATH", path)
-    # a minimally valid, non-expired token: base64url(payload).base64url(sig)
-    import base64
-    import json
-    import time
-
-    def b64(d):
-        return base64.urlsafe_b64encode(d).decode().rstrip("=")
-
-    payload = {"email": "a@b.c", "plan": "studio", "exp": int(time.time()) + 99999}
-    token = b64(json.dumps(payload).encode()) + "." + b64(b"sig")
-    lic.save_license(token)
+    lic.save_license(signed_token)  # a real signed token (see the signed_token fixture)
     mode = path.stat().st_mode & 0o777
     assert mode == 0o600, f"license token is {oct(mode)} — must be 0o600 (owner-only)"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes only")
-def test_license_save_does_not_clobber_shared_parent_dir_perms(tmp_path, monkeypatch):
+def test_license_save_does_not_clobber_shared_parent_dir_perms(tmp_path, monkeypatch, signed_token):
     """Review finding: ~/.recall is SHARED (connect.json, recent.json, rules.md). Saving a
     license must not rewrite the parent dir's mode and strip a permission the user set."""
     import recall.license as lic
@@ -297,15 +287,7 @@ def test_license_save_does_not_clobber_shared_parent_dir_perms(tmp_path, monkeyp
     sibling.chmod(0o644)
     monkeypatch.setattr(lic, "LICENSE_PATH", parent / "license.token")
 
-    import base64
-    import json
-    import time
-
-    def b64(d):
-        return base64.urlsafe_b64encode(d).decode().rstrip("=")
-
-    payload = {"email": "a@b.c", "plan": "studio", "exp": int(time.time()) + 99999}
-    lic.save_license(b64(json.dumps(payload).encode()) + "." + b64(b"sig"))
+    lic.save_license(signed_token)  # a real signed token (see the signed_token fixture)
 
     assert (parent.stat().st_mode & 0o777) == 0o755, "shared parent dir perms were clobbered"
     assert (sibling.stat().st_mode & 0o777) == 0o644, "sibling file perms were clobbered"

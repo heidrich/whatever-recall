@@ -68,6 +68,13 @@ class Index:
         # were recomputed on EVERY recall. Cached here; every anchor/node mutation
         # calls _invalidate_corpus_stats() (hook hot-path, measured on a 7k-node index).
         self._corpus_stats: tuple[int, int] | None = None
+        # Resolver (search-inversion) — its construction loads ALL symbols + IDF + mines
+        # the synonym maps (access_log + knowledge corpus); measured ~55ms on this index,
+        # and resolve() rebuilt it on EVERY call. Cached here, invalidated by the same
+        # node/anchor mutation seam as the corpus stats (a stamp/reindex changes it). The
+        # access_log keeps growing under it, but the synonym FLYWHEEL learns across
+        # sessions, not intra-query, so a per-process-warm resolver is correct + ~40x faster.
+        self._resolver = None  # type: ignore[var-annotated]
 
     # ------------------------------------------------------------------ open
     @classmethod
@@ -100,7 +107,11 @@ class Index:
         power_run: int | None = None,
         base_sha: str | None = None,
         author: str | None = None,
+        predicate: str | None = None,
+        outcome: str | None = None,
+        visibility: str = "team",
         dedup: bool = True,
+        consumer: str = "cli",
     ) -> dict[str, Any]:
         """Stamp a node. Returns {action: NEW|MERGE, node_id, ...}.
 
@@ -114,12 +125,93 @@ class Index:
         onto an existing node returns the anchors it ADDED (added_anchors) so the
         caller can record them for a precise synonym-onto-bootstrap undo.
         """
+        t0 = time.perf_counter()
+        # HEADLINE SPLIT (2026-06-15): a stamp's title should be a short HEADLINE, with the
+        # detail in the body — so the story chain shows the Decision once (the headline) and
+        # the full text once (the body), never the same 400-char paragraph twice. Dogfooding
+        # put whole summaries into `title` with body=None; when that happens we split the
+        # title at its first sentence boundary: headline -> title, the rest -> body. Only when
+        # there's no body to clobber, so an explicit (title, body) pair is left untouched.
+        if (body is None or not str(body).strip()) and title and len(title) > _HEADLINE_MAX:
+            head, rest = _split_headline(title)
+            if rest:
+                title, body = head, rest
+        # that freshen() re-verifies free, every commit — catching a claim that is WRONG now
+        # even on an unmoved file (GAP A). Validate at WRITE time so a typo fails the stamp
+        # instead of silently storing an unparseable predicate that evaluate_predicate would
+        # treat as UNKNOWN (a malformed check that never fires is worse than no check — it
+        # reads as "verified" green). A None/empty predicate is the normal nudged path: the
+        # node simply has no check and freshen() falls back to SHA-drift exactly as before.
+        if outcome is not None:
+            outcome = outcome.strip() or None  # empty -> None (nudged: no outcome is honest)
+        if predicate is not None:
+            predicate = predicate.strip() or None
+        if predicate is not None:
+            from recall.predicate import parse_predicate
+            # Cheap ReDoS/footgun bound: a real predicate is a short anchor pattern. A
+            # multi-KB regex is either a mistake or a catastrophic-backtracking hazard for
+            # freshen() (which runs in the dashboard loop + the git hook). Reject it at
+            # write time rather than store a check that could hang every later re-verify.
+            if len(predicate) > 500:
+                raise ValueError(
+                    f"predicate too long ({len(predicate)} chars, max 500) — a check should "
+                    "be a short anchor pattern, not a program"
+                )
+            if parse_predicate(predicate) is None:
+                raise ValueError(
+                    f"unusable predicate {predicate!r} — expected "
+                    "'contains:<regex>' / 'absent:<regex>' clauses joined by ' && ', and no "
+                    "catastrophic-backtracking shape like (x+)+ (it would hang freshen())"
+                )
+        # PATH CONTAINMENT (security, adversarial review 2026-06-15): an explicit file_path
+        # must point INSIDE the repo. An absolute or '..'-escaping path would make freshen()'s
+        # predicate read a file outside the repo on every tick. Reject at write time so a bad
+        # stamp fails loud rather than persisting a permanent out-of-repo check. (The read
+        # path in evaluate_predicate also guards this — defence in depth.) Only checked when
+        # we can resolve against a real repo root; a None repo (memory/dry) skips it.
+        if file_path is not None and self._repo is not None:
+            from pathlib import Path as _Path
+            norm = file_path.replace("\\", "/")
+            try:
+                root = _Path(self._repo).resolve()
+                target = (root / norm).resolve()
+                target.relative_to(root)  # ValueError if outside the repo
+            except (ValueError, OSError):
+                raise ValueError(
+                    f"file_path {file_path!r} escapes the repo — a pinned file must be "
+                    "inside the repository (no absolute paths, no '..')"
+                )
+        # ANCHOR→FILE PINNING (dogfood fix 2026-06-14): a `stamp --anchors <path>`
+        # was meant to hang the note ON that file so `brief <path>` surfaces it as a
+        # WHY — but stamp only ever set file_path from the explicit --file flag, so a
+        # path passed via --anchors left file_path=NULL and the note "floated"
+        # (invisible to brief, which reads WHERE file_path=?). If no file_path was
+        # given, derive it from the FIRST anchor that matches a real file recall
+        # already indexes (matching a known file avoids pinning on a stray "see foo/bar"
+        # phrase). Anchors still go into anchor_set for FTS/dedup as before.
+        if file_path is None and anchors:
+            for a in anchors:
+                cand = (a or "").strip().replace("\\", "/")
+                if "/" in cand and self._is_known_file(cand):
+                    file_path = cand
+                    break
         anchor_set = set(a.strip().lower() for a in (anchors or []) if a.strip())
         if not anchor_set:
             anchor_set = extract_anchors(f"{title} {body or ''}")
         facets = canonicalize_tags(
             tags or [], self.rules.tag_aliases, self.rules.allowed_tags
         )
+        # activity-console signal (v7): log only DELIBERATE, INTERACTIVE stamps (a real
+        # `recall stamp` from the CLI or the MCP stamp tool). Three machine paths must stay
+        # silent or they flood the console + add a commit per row on the index hot path:
+        #   - bootstrap re-index (origin!='live'), Power-Mode (power_run set), AND
+        #   - stamp_from_commit replaying git trailers, which calls stamp(origin='live') once
+        #     per trailer-commit during the `git log` walk → it passes consumer='commit' so we
+        #     skip it here (the console only wants user/AI actions, consumer cli/mcp).
+        def _log_stamp(nid):
+            if origin == "live" and power_run is None and consumer != "commit":
+                self._log(title[:120], nid, 0, 1,
+                          round((time.perf_counter() - t0) * 1_000_000), consumer, kind="stamp")
 
         if dedup and anchor_set:
             existing, overlap = self._dedup_via_recall(anchor_set)
@@ -127,10 +219,34 @@ class Index:
                 added = self._add_anchors(existing, anchor_set)  # enrich, don't duplicate
                 if facets:
                     self._merge_facets(existing, facets)
+                # A predicate passed on a MERGE sets/replaces the existing node's check —
+                # the freshest stamp wins (you re-stamped because the claim or its check
+                # changed). Never CLEAR a predicate on merge: omitting --predicate on a
+                # re-stamp must not silently drop a working check the node already had.
+                if predicate is not None:
+                    self.db.execute(
+                        "UPDATE nodes SET predicate=? WHERE id=?", (predicate, existing)
+                    )
+                # Same rule as predicate: a re-stamp WITH an outcome sets/replaces it (the
+                # outcome is exactly what a re-stamp records — "here's how it turned out");
+                # omitting it never CLEARS an outcome the note already had.
+                if outcome is not None:
+                    self.db.execute(
+                        "UPDATE nodes SET outcome=? WHERE id=?", (outcome, existing)
+                    )
+                # Visibility on a MERGE is MONOTONICALLY TIGHTENING: re-stamping with
+                # `private` makes the node private, but a default `team` re-stamp NEVER
+                # un-privates a node that was already private. The safe direction is the
+                # default — you can never accidentally re-share a secret by re-stamping it.
+                if visibility == "private":
+                    self.db.execute(
+                        "UPDATE nodes SET visibility='private' WHERE id=?", (existing,)
+                    )
                 self.db.commit()
                 title_existing = self.db.execute(
                     "SELECT title FROM nodes WHERE id=?", (existing,)
                 ).fetchone()[0]
+                _log_stamp(existing)
                 return {
                     "action": "MERGE",
                     "node_id": existing,
@@ -144,26 +260,52 @@ class Index:
 
         node_id = self._insert_node(
             kind, title, body, facets, file_path, symbol, line, sha, origin,
-            power_run, base_sha, author,
+            power_run, base_sha, author, predicate, outcome, visibility,
         )
         self._add_anchors(node_id, anchor_set)
         for ekind, target in (edges or []):
             self._add_edge_to_target(node_id, ekind, target, sha, power_run, base_sha)
         self.db.commit()
+        _log_stamp(node_id)
         return {"action": "NEW", "node_id": node_id, "anchors": len(anchor_set)}
+
+    def _is_known_file(self, rel_path: str) -> bool:
+        """True if `rel_path` (forward-slash) is a file recall already indexes — used
+        to decide whether a path-like anchor should also PIN the note's file_path.
+        Matches any node carrying that file_path (a code-symbol or the file node)."""
+        return self.db.execute(
+            "SELECT 1 FROM nodes WHERE REPLACE(file_path,'\\','/')=? LIMIT 1",
+            (rel_path,),
+        ).fetchone() is not None
 
     def stamp_from_commit(self, commit_msg: str, commit_sha: str,
                           author: str | None = None) -> dict[str, Any] | None:
         """Parse Recall-* trailers from a commit message and stamp self-acting.
 
         Returns None for a normal commit without trailers (the system ignores it).
-        Trailers: Recall-anchors, Recall-why, Recall-tags, Recall-edge (kind -> target).
+        Trailers: Recall-anchors, Recall-why, Recall-tags, Recall-edge (kind -> target),
+        Recall-predicate (a re-runnable CHECK for the claim — arrow 1, v8),
+        Recall-outcome (what CAME of the decision — the chain end, distinct from the why; v9).
         """
         m_anchors = re.search(r"^Recall-anchors:\s*(.+)$", commit_msg, re.MULTILINE)
         if not m_anchors or not m_anchors.group(1).strip():
             return None  # no trailer, or an empty/whitespace-only anchors declaration
         m_why = re.search(r"^Recall-why:\s*(.+)$", commit_msg, re.MULTILINE)
         m_tags = re.search(r"^Recall-tags:\s*(.+)$", commit_msg, re.MULTILINE)
+        m_out = re.search(r"^Recall-outcome:\s*(.+)$", commit_msg, re.MULTILINE)
+        outcome = m_out.group(1).strip() if (m_out and m_out.group(1).strip()) else None
+        m_pred = re.search(r"^Recall-predicate:\s*(.+)$", commit_msg, re.MULTILINE)
+        # A predicate in a trailer is validated inside stamp(); but a malformed one must
+        # NOT abort the whole commit-replay (one bad trailer would lose the note + every
+        # later trailer in the log walk). Pre-validate here and DROP a bad predicate to
+        # no-predicate — the note still stamps, it just falls back to drift (the nudged
+        # contract: a missing/unusable check is never an error, only a quieter signal).
+        predicate = None
+        if m_pred and m_pred.group(1).strip():
+            from recall.predicate import parse_predicate
+            cand = m_pred.group(1).strip()
+            if parse_predicate(cand) is not None:
+                predicate = cand
         edges = [
             (m.group(1).strip(), m.group(2).strip())
             for m in re.finditer(
@@ -191,8 +333,12 @@ class Index:
             kind="lesson",
             edges=edges,
             sha=commit_sha,
+            predicate=predicate,
+            outcome=outcome,
             origin="live",
             author=author,
+            consumer="commit",  # machine git-trailer replay — NOT an interactive stamp, keep it
+                                # out of the activity console (else a re-index floods it). v7.
         )
 
     # ----------------------------------------------- power runs (ADR-008, reversible)
@@ -349,13 +495,16 @@ class Index:
         """Remove every task node (ADR-017) so tasks can be re-indexed without dupes
         (tasks are dedup=False). Touches ONLY kind='task'; edges + anchors CASCADE,
         fts mirror cleared by hand. Returns how many were removed."""
-        ids = [r[0] for r in self.db.execute(
-            "SELECT id FROM nodes WHERE kind='task'").fetchall()]
-        if not ids:
+        n = self.db.execute("SELECT COUNT(*) FROM nodes WHERE kind='task'").fetchone()[0]
+        if not n:
             return 0
-        ph = ",".join("?" * len(ids))
-        self.db.execute(f"DELETE FROM fts_anchors WHERE node_id IN ({ph})", ids)
-        self.db.execute(f"DELETE FROM nodes WHERE id IN ({ph})", ids)
+        # Delete via a subquery, NOT a materialized id-list IN — a repo with >999 task
+        # nodes (SQLITE_MAX_VARIABLE_NUMBER on older SQLite) would otherwise trip "too
+        # many SQL variables" on the bind list. A correlated subquery has zero binds and
+        # is correct for any count. (P3 bug-hunt 2026-06-15.)
+        self.db.execute(
+            "DELETE FROM fts_anchors WHERE node_id IN (SELECT id FROM nodes WHERE kind='task')")
+        self.db.execute("DELETE FROM nodes WHERE kind='task'")
         # Sweep task-anchor file nodes that no longer carry any edge (their only reason to
         # exist was to anchor a now-deleted task link). Re-index recreates them if needed,
         # so this stays idempotent and avoids a slow orphan leak on a non-code file.
@@ -365,7 +514,7 @@ class Index:
         )
         self.db.commit()
         self._invalidate_corpus_stats()
-        return len(ids)
+        return n
 
     def _delete_node(self, node_id: int) -> None:
         """Delete a node and its FTS mirror. FK ON DELETE CASCADE clears node_anchors
@@ -373,6 +522,75 @@ class Index:
         self.db.execute("DELETE FROM fts_anchors WHERE node_id=?", (node_id,))
         self.db.execute("DELETE FROM nodes WHERE id=?", (node_id,))
         self._invalidate_corpus_stats()
+
+    def assert_no_private(self) -> None:
+        """WATERPROOF GATE — raise unless this DB holds ZERO private content (owner:
+        "vorm build muss das fix gecheckt werden, eine 100% wasserfeste sichere rule").
+
+        This is the fail-closed verification that runs AFTER purge_private() on an
+        export copy: it does not trust that the purge worked, it PROVES it. Checks
+        every place a private note could hide — the node row, and its FTS mirror /
+        node_anchors / edges / node_feedback that should have gone with it. Any
+        survivor is a leak: raise SystemExit so the caller throws the output away and
+        the build/export ABORTS. Never returns on a non-clean DB."""
+        leaks: list[str] = []
+        n_priv = self.db.execute(
+            "SELECT COUNT(*) FROM nodes WHERE visibility='private'"
+        ).fetchone()[0]
+        if n_priv:
+            leaks.append(f"{n_priv} node(s) still marked visibility='private'")
+        # a private node's traces must not survive its deletion (orphans = a leak path)
+        orphan_anchors = self.db.execute(
+            "SELECT COUNT(*) FROM node_anchors na "
+            "LEFT JOIN nodes n ON n.id=na.node_id WHERE n.id IS NULL"
+        ).fetchone()[0]
+        if orphan_anchors:
+            leaks.append(f"{orphan_anchors} orphaned node_anchors row(s)")
+        orphan_fts = self.db.execute(
+            "SELECT COUNT(*) FROM fts_anchors fa "
+            "WHERE fa.node_id NOT IN (SELECT id FROM nodes)"
+        ).fetchone()[0]
+        if orphan_fts:
+            leaks.append(f"{orphan_fts} orphaned fts_anchors row(s)")
+        orphan_edges = self.db.execute(
+            "SELECT COUNT(*) FROM edges e WHERE e.src_node NOT IN (SELECT id FROM nodes) "
+            "OR e.dst_node NOT IN (SELECT id FROM nodes)"
+        ).fetchone()[0]
+        if orphan_edges:
+            leaks.append(f"{orphan_edges} orphaned edge(s)")
+        if leaks:
+            raise SystemExit(
+                "ABORT — export is NOT private-clean (refusing to write a leaky brain):\n  "
+                + "\n  ".join(leaks)
+            )
+
+    def purge_private(self) -> int:
+        """Remove every node marked visibility='private' from THIS connection's DB.
+        FK ON DELETE CASCADE clears their edges/node_anchors/node_feedback; the two
+        FK-less tables (fts_anchors, access_log) are mirrored by hand. Used on a COPY
+        of the brain by export() — never on the live `.mind`. Returns the count removed.
+
+        Defensive: also drops any edge that touches a private node BEFORE the node
+        delete, in case foreign_keys is off on this connection (a copied DB opened
+        without the PRAGMA would otherwise leave dangling edges)."""
+        ids = [r[0] for r in self.db.execute(
+            "SELECT id FROM nodes WHERE visibility='private'"
+        ).fetchall()]
+        if not ids:
+            return 0
+        ph = ",".join("?" for _ in ids)
+        # FK-less mirrors first (CASCADE won't touch these)
+        self.db.execute(f"DELETE FROM fts_anchors WHERE node_id IN ({ph})", ids)
+        self.db.execute(f"DELETE FROM access_log WHERE node_id IN ({ph})", ids)
+        # belt-and-braces: drop edges to/from a private node explicitly (in case the
+        # copied DB's connection has foreign_keys OFF — then CASCADE wouldn't fire)
+        self.db.execute(
+            f"DELETE FROM edges WHERE src_node IN ({ph}) OR dst_node IN ({ph})", ids + ids
+        )
+        self.db.execute(f"DELETE FROM node_anchors WHERE node_id IN ({ph})", ids)
+        self.db.execute(f"DELETE FROM nodes WHERE id IN ({ph})", ids)
+        self.db.commit()
+        return len(ids)
 
     def _remove_recorded_synonyms(self, added: dict[str, list[str]]) -> int:
         """Undo the synonym-onto-existing-node grafts a run recorded.
@@ -466,7 +684,8 @@ class Index:
             self._log(query, None, 0, 0, latency_us, consumer)
             return res
 
-        results = [self._build_levels(nid, hits, sc, set(toks)) for nid, hits, sc, _ in scored]
+        results = [r for nid, hits, sc, _ in scored
+                   if (r := self._build_levels(nid, hits, sc, set(toks))) is not None]
         top = scored[0]
         self._log(query, top[0], top[2], 1, latency_us, consumer)
 
@@ -494,13 +713,16 @@ class Index:
         }
 
     # ------------------------------------------------------- brief (Wave A, ADR-018)
-    def brief(self, file_path: str, *, why_k: int = 6, sym_k: int = 30) -> dict[str, Any]:
+    def brief(self, file_path: str, *, why_k: int = 6, sym_k: int = 30,
+              rich: bool = False, consumer: str = "cli") -> dict[str, Any]:
         """Pre-Edit Briefing — everything recall knows about ONE file, before I touch it.
 
         Where recall() answers a *query* in tracks, brief() answers a *file*: it bundles
         the five read-only views that keep me from silently undoing a deliberate decision.
           why        — commits/lessons/ADRs pinned to the file (WHY it is the way it is),
                        newest-meaningful first; never a code-symbol (those are `symbols`)
+          warns      — landmines: lessons/decisions that `warns_about` this file's code,
+                       so a past mistake fires UNPROMPTED before I edit (arrow 2 / conscience)
           breaks     — files that depend on this one (blast radius) → what I risk breaking
           depends_on — the static depends_on chain this file leans on
           open_tasks — unfinished plans/tasks wired to the file (ADR-017, standing intent)
@@ -510,6 +732,7 @@ class Index:
 
         Pure SQL over the already-stamped graph — no model is run (ADR-014). A file the
         index has never seen returns an empty-but-shaped briefing, never an error."""
+        t0 = time.perf_counter()
         rel = (file_path or "").replace("\\", "/")
         # symbols defined IN this file — the "what's in it" view, by source order.
         # A file carries one symbol=NULL/line=NULL representative node (the anchor that
@@ -528,36 +751,787 @@ class Index:
         ]
         # knowledge pinned to the file: commits/lessons/ADRs/plans — NOT code-symbols
         # (a symbol is structure, not the why). Newest id first ≈ most recent knowledge.
+        #
+        # TWO sources (dogfood fix 2026-06-14): a note reaches a file either by
+        # file_path (the pin) OR by carrying the file's PATH as an anchor term
+        # (`stamp --anchors <path>`). brief used to read ONLY file_path, so a note
+        # anchored to the file by term — the primary way to attach a decision — was
+        # invisible here. We now UNION both: file_path match ∪ anchored-by-path-term,
+        # de-duplicated by node id. (Fix A makes new stamps also set file_path, so this
+        # mainly recovers already-floating notes; together they close the gap.)
         why_rows = self.db.execute(
-            "SELECT id, kind, title, body, stamped_at_sha FROM nodes "
-            "WHERE REPLACE(file_path,'\\','/')=? AND kind NOT IN ('code-symbol','task','file') "
+            "SELECT id, kind, title, body, stamped_at_sha, predicate, outcome FROM nodes WHERE id IN ("
+            "  SELECT id FROM nodes WHERE REPLACE(file_path,'\\','/')=? "
+            "  UNION "
+            "  SELECT na.node_id FROM node_anchors na JOIN anchors an ON an.id=na.anchor_id "
+            "  WHERE an.term=?"
+            ") AND kind NOT IN ('code-symbol','task','file') "
             "ORDER BY id DESC LIMIT ?",
-            (rel, why_k),
+            (rel, rel.lower(), why_k),
         ).fetchall()
+        why_drifts = self._node_drifts([r["id"] for r in why_rows])  # one query, not k
         why = [
             {
                 "node_id": r["id"], "kind": r["kind"], "title": r["title"],
                 "why": (r["body"] or "").splitlines()[0] if r["body"] else "",
                 "sha": (r["stamped_at_sha"] or "")[:7],
-                "drift": self._node_drift(r["id"]),
+                "drift": why_drifts.get(r["id"]),
+                # arrow 1: the claim's own re-runnable check (surfaced so the modal can show
+                # "recall re-verified this claim"). None for a claim without a predicate.
+                "predicate": r["predicate"],
+                # v9: what CAME of the decision — the chain end, distinct from the title.
+                # None when nothing was recorded (shown honestly, never interpreted).
+                "outcome": r["outcome"],
             }
             for r in why_rows
         ]
         known = bool(symbols or why_rows or self.db.execute(
             "SELECT 1 FROM nodes WHERE REPLACE(file_path,'\\','/')=? LIMIT 1", (rel,)
         ).fetchone())
-        return {
+        # activity-console signal (v7): one row per briefing. The file is the "query";
+        # surfaced=1 when the file is actually known, so the console can show empty briefs too.
+        self._log(rel, None, 0, 1 if known else 0,
+                  round((time.perf_counter() - t0) * 1_000_000), consumer, kind="brief")
+        # Landmines lead, and a lesson that is BOTH pinned here and warns about this file
+        # must not show twice (once as WHY, once as LANDMINE) — the louder conscience signal
+        # wins, so drop those node-ids from `why` (adversarial sweep 2026-06-15, dedup-overlap).
+        warns = self._landmines(rel)
+        warn_ids = {w["node_id"] for w in warns}
+        why = [w for w in why if w["node_id"] not in warn_ids]
+        out = {
             "file": rel,
             "known": known,
             "symbols": symbols,
             "why": why,
+            "warns": warns,
             "depends_on": self._file_dependencies(rel),
             "breaks": self._blast_radius(rel),
             "open_tasks": self.open_tasks_for_file(rel),
             "drift": self._file_drift(rel),
         }
+        # MOVES-WITH neighborhood (workstream D, always-on, pure SQL) — guarded so a query hiccup
+        # never breaks the briefing; degrades to a silenced cluster.
+        try:
+            out["neighborhood"] = self.neighborhood(rel)
+        except Exception:
+            out["neighborhood"] = {"file": rel, "cluster": [], "bound_by": None, "silenced": True}
+        # RICH brief (dashboard story chain only, 2026-06-15): the extra experience layers
+        # that make the causal chain reicher — impact (precise blast radius from co-change +
+        # structural dependents) and precedent (have we faced an analogous situation before?).
+        # Kept behind `rich` so the CLI/MCP brief stays lean and fast (these run extra serves);
+        # each is empty-but-shaped when there's nothing, so the modal renders nothing for it.
+        if rich and known:
+            try:
+                imp = self.impact(rel, limit=8)
+                out["impact"] = imp.get("impacted", [])
+            except Exception:
+                out["impact"] = []
+            # precedent is keyed off a SITUATION; the file's lead note title is the best
+            # available "what am I about to touch" phrase. Skip if the file has no why-note.
+            try:
+                situation = why[0]["title"] if why else None
+                if situation:
+                    prec = self.precedent(situation, limit=4)
+                    # don't echo the very note we're reading back as its own precedent
+                    out["precedent"] = [
+                        p for p in prec.get("precedents", [])
+                        if p.get("node_id") not in {w["node_id"] for w in why[:1]}
+                    ][:3]
+                else:
+                    out["precedent"] = []
+            except Exception:
+                out["precedent"] = []
+        return out
 
     # ------------------------------------------------- contested spots (Wave B, ADR-019)
+    def resolve(self, guess: str, *, warmth: float | None = None, top: int = 5) -> dict[str, Any]:
+        """Search-inversion (ADR-037): turn a HALLUCINATED search term into the real
+        vocabulary of THIS repo BEFORE anything greps. `enforceSeats` → this repo
+        means `confirmSeatOrRollback`. The vocabulary mismatch, corrected from
+        write-time repo experience (not text statistics) — see recall.resolve.
+
+        warmth: None → use the index's own measured warmth (fraction of symbols with
+        lived experience), so a young/cold repo gets pure vocabulary correction and a
+        worked-in repo additionally gets the experience tie-break + learned synonyms.
+        Read-only, 0 model tokens; re-ranks and annotates but NEVER drops a candidate
+        (grep stays the complete recall)."""
+        from recall.resolve import Resolver
+        # reuse the per-process-warm resolver; rebuilt only after a node/anchor mutation
+        # (see _invalidate_corpus_stats). Rebuilding it per call cost ~55ms (full symbol
+        # load + synonym mining) — the dominant term in resolve()'s latency.
+        if self._resolver is None:
+            self._resolver = Resolver(self.db)
+        r = self._resolver
+        idx_warmth = r.warmth_of_index()
+        eff = idx_warmth if warmth is None else warmth
+        cands = r.resolve(guess, warmth=eff, top=top)
+        # log the resolve like any other read so the flywheel can learn from it too
+        # (which guess landed on which symbol), but mark the consumer so it doesn't
+        # masquerade as a primary query in synonym mining.
+        try:
+            self._log(guess, cands[0].node_id if cands else None,
+                      0, 1 if cands else 0, 0, "resolve", kind="resolve")
+        except Exception:
+            pass
+        return {
+            "guess": guess,
+            "index_warmth": idx_warmth,
+            "warmth_used": eff,
+            "candidates": [
+                {
+                    "symbol": c.symbol, "file": c.file_path, "line": c.line,
+                    "node_id": c.node_id, "vocab_score": round(c.vocab_score, 4),
+                    "exp_score": round(c.exp_score, 4), "via_synonym": c.via_synonym,
+                    "why": c.why,
+                }
+                for c in cands
+            ],
+        }
+
+    # ------------------------------------------------- precedent (arrow 3, the recall arrow)
+    def precedent(self, situation: str, *, limit: int = 5, consumer: str = "cli") -> dict[str, Any]:
+        """Precedent — arrow 3, the `recall` arrow (core → AI). Given a free-text SITUATION
+        the AI is about to act in ("switching auth to JWT", "adding a money path"), serve the
+        most ANALOGOUS past DECISIONS/LESSONS, each tagged with its OUTCOME, so the AI
+        generalizes from THIS repo's lived experience instead of its priors.
+
+        Where recall() answers "where / why / what" across every node kind and brief() answers
+        a single file, precedent() answers a JUDGEMENT question — "have we been here before,
+        and how did it go?" — and is therefore scoped to the deliberate, reusable record:
+        kind IN ('decision','lesson'). Code symbols, commits and tasks are not precedent.
+
+        The value over a plain knowledge search is the OUTCOME attached to each hit — the part
+        that turns a search result into a precedent:
+          superseded_by  — the decision that LATER replaced this one (the rule that governs
+                           NOW: the terminal of the supersedes chain); None if it still stands.
+                           "We tried X and reversed it" IS the lesson, so it is kept, not hidden.
+          became_landmine— this decision now `warns_about` code, i.e. it bit someone and was
+                           promoted to a conscience warning (arrow 2) — a strong "heed this".
+          drift          — the code this precedent was pinned to has moved since, so it may no
+                           longer describe the codebase (verify before leaning on it).
+
+        Ranked by relevance (most analogous first), importance as the tie-break — never by
+        outcome: the AI wants the closest situation regardless of how it ended, because the
+        ending is exactly what it came to learn. Read-only, model-free, 0 tokens (ADR-014)."""
+        t0 = time.perf_counter()
+        toks = sorted({t for t in tokenize_query(situation)
+                       if t and t not in self.rules.query_stopwords})
+        if not toks:
+            return self._no_precedent(situation, "no tokens", t0)
+        raw, bm25 = self._bm25_scores(toks)
+        if not raw:
+            return self._no_precedent(situation, "no match", t0)
+        floor = self.rules.silence_floor
+        scored: list[tuple[int, float, Any]] = []
+        for node_id, hits in raw.items():
+            if hits < floor:
+                continue  # RAW floor — weighting can't manufacture a precedent from nothing
+            n = self.db.execute(
+                "SELECT kind, title, body, file_path, stamped_at_sha, importance "
+                "FROM nodes WHERE id=?", (node_id,)).fetchone()
+            if n is None or n["kind"] not in ("decision", "lesson"):
+                continue  # precedent = the DELIBERATE record only (no code / commits / tasks)
+            facets = self._node_facets(node_id)
+            if self._is_tabu(facets):
+                continue  # rules.md stay_silent_on — suppressed regardless of score
+            fw = max([self.rules.facet_weight(f) for f in facets] or [1.0])
+            scored.append((node_id, bm25.get(node_id, 0.0) * fw, n))
+        # most analogous first; importance breaks ties; node_id last for determinism
+        scored.sort(key=lambda x: (-x[1], -(x[2]["importance"] or 0), x[0]))
+        scored = scored[:max(1, limit)]
+        latency_us = round((time.perf_counter() - t0) * 1_000_000)
+        if not scored:
+            res = self._no_precedent(situation, f"no decision/lesson above floor ({floor})",
+                                     t0, latency_us=latency_us)
+            self._log(situation, None, 0, 0, latency_us, consumer, kind="precedent")
+            return res
+        precedents = [self._precedent_outcome(nid, score, n) for nid, score, n in scored]
+        self._log(situation, scored[0][0], scored[0][1], 1, latency_us, consumer, kind="precedent")
+        return {
+            "situation": situation,
+            "silenced": False,
+            "latency_us": latency_us,
+            "precedents": precedents,
+        }
+
+    # ------------------------------------------------- impact (AI-native call-hierarchy replacement)
+    def _co_change_partners(self, files) -> dict[str, int]:
+        """The co-change partner-degree map for a set of files: {partner_file: distinct co-change
+        degree}, excluding the input files. Factored byte-identically out of impact() (the SYMMETRIC-
+        pair double-count fix, sweep #1/#11) so impact() AND neighborhood() (workstream D) share ONE
+        query — pinned by the agreement drift-guard. Pure SELECT, model-free."""
+        files = set(files)
+        targets = sorted(files)[:50]
+        if not targets:
+            return {}
+        ph = ",".join("?" * len(targets))
+        co: dict[str, int] = {}
+        for row in self.db.execute(
+            f"""
+            SELECT partner, COUNT(DISTINCT tfile) AS deg FROM (
+              SELECT REPLACE(ns.file_path,'\\','/') AS tfile,
+                     REPLACE(nd.file_path,'\\','/') AS partner
+                FROM edges e JOIN nodes ns ON ns.id=e.src_node JOIN nodes nd ON nd.id=e.dst_node
+               WHERE e.kind='co_changed' AND REPLACE(ns.file_path,'\\','/') IN ({ph})
+                 AND nd.file_path IS NOT NULL
+              UNION ALL
+              SELECT REPLACE(nd.file_path,'\\','/') AS tfile,
+                     REPLACE(ns.file_path,'\\','/') AS partner
+                FROM edges e JOIN nodes ns ON ns.id=e.src_node JOIN nodes nd ON nd.id=e.dst_node
+               WHERE e.kind='co_changed' AND REPLACE(nd.file_path,'\\','/') IN ({ph})
+                 AND ns.file_path IS NOT NULL
+            ) GROUP BY partner
+            """,
+            targets + targets,
+        ).fetchall():
+            p = row["partner"]
+            if p and p not in files:
+                co[p] = row["deg"]
+        return co
+
+    def _depends_corroboration(self, rel: str) -> set[str]:
+        """Partner files that ALSO have a depends_on/implements/guarded_by edge to/from `rel` —
+        used as a confidence LABEL only (import+co-change vs co-change-only), NEVER to filter or
+        reorder (protects ADR-028 'never drops/hides' + the axis-4 blind spot). Scoped to rel."""
+        out: set[str] = set()
+        for a, b in self.db.execute(
+            """SELECT REPLACE(ns.file_path,'\\','/') AS a, REPLACE(nd.file_path,'\\','/') AS b
+                 FROM edges e JOIN nodes ns ON ns.id=e.src_node JOIN nodes nd ON nd.id=e.dst_node
+                WHERE e.kind IN ('depends_on','implements','guarded_by')
+                  AND ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL
+                  AND (REPLACE(ns.file_path,'\\','/')=? OR REPLACE(nd.file_path,'\\','/')=?)""",
+            (rel, rel),
+        ).fetchall():
+            partner = b if a == rel else (a if b == rel else None)
+            if partner and partner != rel:
+                out.add(partner)
+        return out
+
+    def _co_change_verified(self, rel: str) -> dict[str, bool]:
+        """{partner_file: edge.verified bool} for `rel`'s co_changed edges — the co-movement
+        relationship's OWN freshness (distinct from the partner FILE's drift). A 0 means 'this
+        co-change may be stale' (git no longer confirms the pair moves together). Scoped to rel."""
+        out: dict[str, bool] = {}
+        for a, b, v in self.db.execute(
+            """SELECT REPLACE(ns.file_path,'\\','/') AS a, REPLACE(nd.file_path,'\\','/') AS b, e.verified AS v
+                 FROM edges e JOIN nodes ns ON ns.id=e.src_node JOIN nodes nd ON nd.id=e.dst_node
+                WHERE e.kind='co_changed' AND ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL
+                  AND (REPLACE(ns.file_path,'\\','/')=? OR REPLACE(nd.file_path,'\\','/')=?)""",
+            (rel, rel),
+        ).fetchall():
+            partner = b if a == rel else (a if b == rel else None)
+            if partner and partner != rel:
+                out[partner] = bool(v) and out.get(partner, True)
+        return out
+
+    def _binding_decision(self, file_path: str, *, cluster_files=()) -> dict | None:
+        """The single most load-bearing decision that GOVERNS this file (or its co-change cluster):
+        a decided_by/guarded_by/supersedes/warns_about source pinned to the file or a cluster file,
+        importance-ranked, a SUPERSEDED source dropped (the `NOT EXISTS supersedes` clause copied
+        from _landmines — NEW SQL, not a reuse: _landmines is warns_about-only). Returns the binding
+        row or None. This is what makes the co-change cluster recall-SHAPED, not a git-reconstructable
+        degree map (None on a repo with no decided_by/guarded_by — honest, not differentiated there)."""
+        rel = (file_path or "").replace("\\", "/")
+        scope = sorted({s for s in ([rel] + [(f or "").replace("\\", "/") for f in cluster_files]) if s})[:51]
+        if not scope:
+            return None
+        ph = ",".join("?" * len(scope))
+        row = self.db.execute(
+            f"""
+            SELECT ns.id, ns.kind, ns.title, ns.body, ns.stamped_at_sha
+              FROM nodes nd
+              JOIN edges e ON e.dst_node = nd.id
+              JOIN nodes ns ON ns.id = e.src_node
+             WHERE e.kind IN ('decided_by','guarded_by','supersedes','warns_about')
+               AND REPLACE(nd.file_path,'\\','/') IN ({ph})
+               AND NOT EXISTS (
+                     SELECT 1 FROM edges sup
+                      WHERE sup.dst_node = ns.id AND sup.kind = 'supersedes')
+             GROUP BY ns.id
+             ORDER BY ns.importance DESC, ns.id DESC
+             LIMIT 1
+            """,
+            scope,
+        ).fetchone()
+        if row is None:
+            return None
+        return {"node_id": row["id"], "kind": row["kind"], "title": row["title"],
+                "why": (row["body"] or "").splitlines()[0] if row["body"] else "",
+                "sha": (row["stamped_at_sha"] or "")[:7], "drift": self._node_drift(row["id"])}
+
+    def neighborhood(self, file_path: str, *, limit: int = 8, min_partners: int = 1) -> dict[str, Any]:
+        """v1.2 Stage-1/2 (workstream D) — the read-only co-change NEIGHBORHOOD of a file: which
+        files move WITH it (git-proven), each labeled with a confidence (import-corroborated vs
+        co-change-only) and TWO distinct staleness signals — `edge_verified` (is the co-movement
+        relationship still git-confirmed) and `partner_drift` (does the partner FILE's own stamped
+        knowledge currently fail its check, via the SAME _file_drift B/brief use) — FUSED with the
+        one binding decision that governs the cluster. A LENS, never a judgmental verdict;
+        `cluster: none` is an honest output. Pure SELECT, model-free. Stage-3 render is OUT OF SCOPE."""
+        rel = (file_path or "").replace("\\", "/")
+        partners = self._co_change_partners([rel])
+        if len(partners) < max(0, min_partners):
+            return {"file": rel, "cluster": [], "bound_by": self._binding_decision(rel),
+                    "silenced": True,
+                    "why": "too little co-change history yet — the neighborhood grows as commits accumulate"}
+        global_deg = self._co_changed_degrees()        # hub down-weight signal (label only)
+        corrob = self._depends_corroboration(rel)       # import corroboration (label only)
+        verified_map = self._co_change_verified(rel)    # the co-change edge's own freshness
+        ordered = sorted(partners.items(), key=lambda kv: (-kv[1], kv[0]))[:max(1, limit)]
+        cluster = [{
+            "file": partner,
+            "confidence": "import + co-change" if partner in corrob else "co-change only",
+            "co_degree": deg,
+            "partner_degree": global_deg.get(partner, deg),
+            "edge_verified": verified_map.get(partner, True),
+            "partner_drift": self._file_drift(partner),
+        } for partner, deg in ordered]
+        bound = self._binding_decision(rel, cluster_files=[c["file"] for c in cluster])
+        return {"file": rel, "cluster": cluster, "bound_by": bound, "silenced": False}
+
+    # ------------------------------------------------- impact (AI-native call-hierarchy replacement)
+    def impact(self, target: str, *, depth: int = 2, limit: int = 25,
+               consumer: str = "cli") -> dict[str, Any]:
+        """AI-native impact set — "if I touch this, what is actually affected?" — the 0-token
+        read-time answer that replaces a human-style call hierarchy.
+
+        A call graph is a HUMAN navigation aid: it must be traversed at read time and only
+        knows the THEORETICAL wiring (imports/calls). recall answers the real edit-time
+        question from two truths a static call graph can't use:
+          • EMPIRICAL co-change — what git history PROVES moved together (recall's `co_changed`
+            graph). Language-agnostic, free, and often a better impact predictor than imports —
+            a config and a handler with no import edge still always shipped together.
+          • STRUCTURAL dependents — the transitive depends_on/implements graph (who imports it).
+        Fused, weighted by causal importance, annotated with landmines + drift. Everything is
+        pre-stamped at write time, so the read is a pure SELECT — 0 model tokens (ADR-014).
+
+        Resolves a SYMBOL or a FILE to the file(s) it lives in (recall's static graph is
+        file-granular — anchored on each file's representative symbol; it builds no per-call-site
+        edges, by design: 'a wrong edge is worse than no edge'. A future write-time `calls` edge,
+        emitted by the editing AI itself, would slot into the SAME walk for function precision —
+        no static parser). Empty-but-shaped for an unknown target, never an error."""
+        t0 = time.perf_counter()
+        depth = max(1, depth)  # adversarial sweep #17/#18: depth<1 made struct weights negative
+        files = self._resolve_to_files(target)
+        if not files:
+            return {"target": target, "resolved": [], "silenced": True,
+                    "reason": "unknown target", "impacted": [],
+                    "latency_us": round((time.perf_counter() - t0) * 1_000_000)}
+        # cap the resolved set: a name in 50+ files is too generic for a meaningful impact, and an
+        # unbounded IN(...) would trip SQLite's variable limit (sweep #16).
+        targets = sorted(files)[:50]
+        # 1. EMPIRICAL — co-change partners. Factored to _co_change_partners() so neighborhood()
+        # (workstream D) shares the SAME query: the SYMMETRIC-pair double-count fix (sweep #1/#11)
+        # lives there ONCE, and an agreement drift-guard pins the two paths can never diverge.
+        co = self._co_change_partners(files)
+        # 2. STRUCTURAL — transitive dependents (who imports it), BFS up the reverse edge map.
+        # `calls` is included so a future write-time call edge needs no code change here.
+        rev: dict[str, set[str]] = {}  # dependency_file -> {dependent_files}
+        for s, d in self.db.execute(
+            """
+            SELECT DISTINCT REPLACE(ns.file_path,'\\','/') AS dependent,
+                            REPLACE(nd.file_path,'\\','/') AS dependency
+              FROM edges e JOIN nodes ns ON ns.id=e.src_node JOIN nodes nd ON nd.id=e.dst_node
+             WHERE e.kind IN ('depends_on','implements','guarded_by','calls')
+               AND ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL
+               AND ns.file_path != nd.file_path
+            """
+        ).fetchall():
+            if s and d and s != d:
+                rev.setdefault(d, set()).add(s)
+        struct: dict[str, int] = {}  # dependent file -> min hop
+        seen = set(files)
+        frontier = set(files)
+        for hop in range(1, max(1, depth) + 1):
+            nxt = set()
+            for f in frontier:
+                for dep in rev.get(f, ()):
+                    if dep not in seen:
+                        nxt.add(dep)
+            if not nxt:
+                break
+            for dep in nxt:
+                struct[dep] = hop
+                seen.add(dep)
+            frontier = nxt
+        # 3. MERGE + score. co-change leads (the empirical signal), structural is second,
+        # importance gently boosts a load-bearing dependent. Closer hop = stronger structural.
+        W_CO, W_STRUCT, IMP_SCALE = 2.0, 1.0, 25.0
+        rows = []
+        for f in set(co) | set(struct):
+            co_deg = co.get(f, 0)
+            hop = struct.get(f)
+            struct_w = (depth - hop + 1) if hop else 0
+            imp = self._file_importance(f)
+            tw = 0.5 if _is_test_file(f) else 1.0  # sweep #10: a test that exercises X is lower-impact than prod that uses it
+            score = (W_CO * co_deg + W_STRUCT * struct_w) * (1.0 + imp / IMP_SCALE) * tw
+            rows.append({"file": f, "co_change": co_deg, "struct_hop": hop,
+                         "importance": round(imp, 1), "score": round(score, 2)})
+        rows.sort(key=lambda r: (-r["score"], -r["co_change"], r["file"]))
+        rows = rows[:max(1, limit)]
+        # annotate ONLY the surfaced rows (one meta lookup per shown row, never per candidate)
+        for r in rows:
+            r["drift"] = self._file_drift(r["file"])
+            r["landmine"] = bool(self._landmines(r["file"], limit=1))
+        latency_us = round((time.perf_counter() - t0) * 1_000_000)
+        self._log(target, None, 0, 1 if rows else 0, latency_us, consumer, kind="impact")
+        try:
+            nb = self.neighborhood(targets[0]) if targets else {"cluster": [], "bound_by": None, "silenced": True}
+        except Exception:
+            nb = {"cluster": [], "bound_by": None, "silenced": True}
+        return {"target": target, "resolved": targets, "silenced": not rows,
+                "impacted": rows, "neighborhood": nb, "latency_us": latency_us}
+
+    # --------------------------------------------- code intelligence (static-code-intel serves)
+    # These answer the navigation questions a static call-graph tool answers (who calls X, what
+    # implements this, what's dead/untested, where are the cycles) — but over recall's ALREADY-STAMPED
+    # graph, so each is a pure SELECT/walk: 0 model tokens, offline (ADR-014). One deliberate honesty:
+    # recall's structural graph is FILE-GRANULAR (it anchors edges on each file's representative
+    # symbol and builds no per-call-site edges — "a wrong edge is worse than no edge"). So these serve
+    # FILE-level truth and SAY so; a future write-time `calls` edge emitted by the editing AI would
+    # slot into the same walks for function precision, no static parser. Every result is shaped-when-
+    # empty (silenced), never an error.
+
+    # File representation is NOT uniform: Python files get a NULL-symbol representative node that
+    # carries the structural edges; TS/JS files are represented by their per-function nodes and the
+    # edges attach to one of THOSE. So we never filter on `symbol IS NULL` — we group by file_path
+    # across ALL code-symbol nodes (see _code_files / _depends_on_graph). (Measured 2026-06-15.)
+    _STRUCT_EDGES = ("depends_on", "implements", "calls", "guarded_by")
+    # Non-code file extensions: a .md/.json/.txt is never "dead code" or "untested code".
+    _CODE_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",
+                  ".rb", ".php", ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt")
+    # Framework/entry files that are loaded by a runtime or convention, not by an import edge —
+    # so "nothing imports it" does NOT mean dead. Matched on the normalized path's basename/segment.
+    _ENTRY_RE = re.compile(
+        r"(?:^|/)(?:__main__|__init__|conftest|setup|manage|main|index|app|wsgi|asgi)\.[a-z]+$"
+        r"|(?:^|/)(?:page|layout|route|loading|error|not-found|middleware|proxy|template|"
+        r"head|sitemap|robots|opengraph-image|default)\.[a-z]+$"  # Next.js / web framework convention
+        r"|\.config\.[a-z]+$|\.d\.ts$"  # build configs + ambient type decls are loaded by tooling, not imported
+    )
+
+    def _norm(self, p: str | None) -> str:
+        return (p or "").replace("\\", "/")
+
+    def _on_disk(self, rel: str) -> bool:
+        """True if the repo-relative path exists on disk. Guards against stale index nodes
+        (a renamed/deleted file leaves a bare-name node behind with 0 edges — it would read
+        as 'dead code' but the file is simply gone). No repo known -> can't verify -> assume yes."""
+        if not self._repo:
+            return True
+        try:
+            return (self._repo / rel).exists()
+        except OSError:
+            return True
+
+    def _code_files(self) -> set[str]:
+        """Every real, on-disk file that has at least one code-symbol node (normalized path).
+        File-granular by design: a file is one entry no matter how many functions/classes it
+        holds, and edges may attach to ANY of its nodes (Python files get a NULL-symbol
+        representative node; TS/JS files are represented by their per-function nodes — there is
+        no single rep convention, so we group by file_path). The on-disk filter drops stale
+        bare-name/renamed nodes so dead/untested can't false-positive on phantoms."""
+        out: set[str] = set()
+        for (fp,) in self.db.execute(
+            "SELECT DISTINCT file_path FROM nodes WHERE kind='code-symbol' "
+            "AND file_path IS NOT NULL AND file_path != ''"
+        ).fetchall():
+            rel = self._norm(fp)
+            if rel and rel not in out and self._on_disk(rel):
+                out.add(rel)
+        return out
+
+    def _depends_on_graph(self) -> dict[str, set[str]]:
+        """The file→file dependency map: adj[a] = {b, ...} means file a DEPENDS ON (imports) b.
+        Built once from the depends_on edges, normalized, self-loops dropped. The spine of
+        callers/callees/cycles."""
+        adj: dict[str, set[str]] = {}
+        for s, d in self.db.execute(
+            "SELECT REPLACE(ns.file_path,'\\','/'), REPLACE(nd.file_path,'\\','/') "
+            "FROM edges e JOIN nodes ns ON ns.id=e.src_node JOIN nodes nd ON nd.id=e.dst_node "
+            "WHERE e.kind='depends_on' AND ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL"
+        ).fetchall():
+            if s and d and s != d:
+                adj.setdefault(s, set()).add(d)
+        return adj
+
+    def _annotate_file(self, rel: str, hop: int | None = None) -> dict[str, Any]:
+        """The per-row decoration every code-intel serve shares: importance, drift, landmine flag."""
+        row = {"file": rel, "importance": self._file_importance(rel),
+               "drift": self._file_drift(rel), "landmine": bool(self._landmines(rel, limit=1))}
+        if hop is not None:
+            row["hop"] = hop
+        return row
+
+    def callers(self, target: str, *, depth: int = 2, limit: int = 50,
+                consumer: str = "cli") -> dict[str, Any]:
+        """Who depends on this? — the FILE-granular call-hierarchy replacement (reverse direction).
+        Walks UP the depends_on graph from the target's file(s): every file that imports it,
+        transitively, with the hop distance. Ranked by closeness then importance. 0 tokens."""
+        return self._hierarchy(target, direction="callers", depth=depth, limit=limit, consumer=consumer)
+
+    def callees(self, target: str, *, depth: int = 2, limit: int = 50,
+                consumer: str = "cli") -> dict[str, Any]:
+        """What does this depend on? — the forward direction: every file the target imports,
+        transitively, with hop distance. The other half of the call hierarchy. 0 tokens."""
+        return self._hierarchy(target, direction="callees", depth=depth, limit=limit, consumer=consumer)
+
+    def _hierarchy(self, target: str, *, direction: str, depth: int, limit: int,
+                   consumer: str) -> dict[str, Any]:
+        t0 = time.perf_counter()
+        depth = max(1, depth)
+        files = self._resolve_to_files(target)
+        if not files:
+            return self._empty_hierarchy(target, direction, "unknown target", t0, consumer)
+        adj = self._depends_on_graph()
+        if direction == "callees":
+            graph = adj  # a -> things a depends on
+        else:
+            graph = {}    # reverse: b -> things that depend on b
+            for a, deps in adj.items():
+                for b in deps:
+                    graph.setdefault(b, set()).add(a)
+        seen: set[str] = set(self._norm(f) for f in files)
+        frontier = set(seen)
+        out: dict[str, int] = {}
+        for hop in range(1, depth + 1):
+            nxt: set[str] = set()
+            for f in frontier:
+                for nb in graph.get(f, ()):
+                    if nb not in seen:
+                        nxt.add(nb)
+            if not nxt:
+                break
+            for nb in nxt:
+                out[nb] = hop
+                seen.add(nb)
+            frontier = nxt
+        rows = [self._annotate_file(f, hop=h) for f, h in out.items()]
+        rows.sort(key=lambda r: (r["hop"], -r["importance"], r["file"]))
+        rows = rows[:max(1, limit)]
+        latency_us = round((time.perf_counter() - t0) * 1_000_000)
+        self._log(target, None, 0, 1 if rows else 0, latency_us, consumer, kind=direction)
+        out_dict = {"target": target, "direction": direction, "granularity": "file",
+                    "resolved": sorted(self._norm(f) for f in files), "silenced": not rows,
+                    "results": rows, "latency_us": latency_us,
+                    "note": "file-granular: recall builds no per-call-site edges by design"}
+        if not rows:
+            # resolved, but no edges on this side — carry a reason so the silenced contract is
+            # uniform with the unknown-target path (red-team callgraph P3). A slash-bearing name
+            # that no node actually carries resolves best-effort, so this is the common empty case.
+            verb = "depends on nothing" if direction == "callees" else "is used by nothing"
+            out_dict["reason"] = f"no {direction} edges recorded ({verb})"
+        return out_dict
+
+    def _empty_hierarchy(self, target, direction, reason, t0, consumer):
+        latency_us = round((time.perf_counter() - t0) * 1_000_000)
+        self._log(target, None, 0, 0, latency_us, consumer, kind=direction)
+        return {"target": target, "direction": direction, "granularity": "file",
+                "resolved": [], "silenced": True, "reason": reason, "results": [],
+                "latency_us": latency_us}
+
+    # NOTE: no `implementors` serve. recall's `implements` edge does NOT encode "file A realizes
+    # interface B" — measured against the live index, all `implements` edges go lesson/decision ->
+    # code-file (they record which DECISION governs a file, not a code-to-code interface link). So a
+    # file->file implementors() would be dead on arrival (every src.file_path is NULL). Shipping an
+    # always-empty command that misrepresents the data is exactly the kind of thing that loses trust
+    # at launch — "a wrong edge is worse than no edge". The govern-this-file relationship is already
+    # served by brief()'s WHY track. (Adversarial red-team finding, 2026-06-15.)
+
+    def dead_code(self, *, limit: int = 50, consumer: str = "cli") -> dict[str, Any]:
+        """Dead-code CANDIDATES — code files that exist on disk but NOTHING in the recorded graph
+        points at them. Conservative by construction: only real on-disk CODE files (excludes
+        docs/configs), excludes test files (a test is meant to have no importer) and framework/entry
+        files (cli, __main__, Next.js page/route/layout — loaded by a runtime, not an import). The
+        live import signal is `depends_on`; `implements`/`guarded_by` are kept in the incoming check
+        only so a file a decision governs is never wrongly flagged (the safe, conservative direction;
+        `calls` is reserved for a future write-time edge and matches nothing today). Labelled
+        CANDIDATES: a file-granular graph can't see dynamic imports/reflection, so this narrows
+        where to look, it doesn't condemn. 0 tokens."""
+        t0 = time.perf_counter()
+        files = self._code_files()  # on-disk code files only (phantoms already dropped)
+        # which files have an incoming structural edge (via ANY of their nodes)? Being inclusive here
+        # makes dead-code MORE conservative (fewer false positives) — the safe direction.
+        imported: set[str] = set()
+        eph = ",".join("?" * len(self._STRUCT_EDGES))
+        for d in self.db.execute(
+            f"SELECT DISTINCT REPLACE(nd.file_path,'\\','/') "
+            f"FROM edges e JOIN nodes nd ON nd.id=e.dst_node "
+            f"WHERE e.kind IN ({eph}) AND nd.file_path IS NOT NULL",
+            list(self._STRUCT_EDGES),
+        ).fetchall():
+            if d[0]:
+                imported.add(d[0])
+        cands = []
+        for rel in files:
+            if rel in imported:
+                continue
+            if not rel.lower().endswith(self._CODE_EXTS):
+                continue  # docs/config are not "dead code"
+            if _is_test_file(rel) or self._ENTRY_RE.search(rel.lower()):
+                continue  # tests + entrypoints are SUPPOSED to have no importer
+            cands.append(self._annotate_file(rel))
+        cands.sort(key=lambda r: (r["importance"], r["file"]))  # least-important first = most likely dead
+        cands = cands[:max(1, limit)]
+        latency_us = round((time.perf_counter() - t0) * 1_000_000)
+        self._log("dead-code", None, 0, len(cands), latency_us, consumer, kind="dead_code")
+        return {"silenced": not cands, "granularity": "file", "candidates": cands,
+                "latency_us": latency_us,
+                "note": "candidates — file-granular graph can't see dynamic imports; verify before deleting"}
+
+    def untested(self, *, limit: int = 50, consumer: str = "cli") -> dict[str, Any]:
+        """Code files with NO recorded link to any test file — no test depends_on / co_changed /
+        calls them. The file-granular 'what has no test edge?' serve. Excludes test files, docs,
+        and entry files. Honest: 'no test EDGE recorded' (a test that exercises a file only via a
+        deep transitive import may not show a direct edge). 0 tokens."""
+        t0 = time.perf_counter()
+        files = self._code_files()
+        # files a TEST file IMPORTS (depends_on / calls only). co_changed is DELIBERATELY excluded:
+        # it is symmetric and empirical, so a single git co-change between a payment file and a test
+        # would falsely mark the payment file "tested" — measured, it hid 23 genuinely-untested files
+        # incl. stripe.ts / orgs.ts / the billing webhook. A test that actually exercises a module
+        # IMPORTS it (a depends_on edge); that is the honest, rigorous test signal. (Red-team 2026-06-15.)
+        tested: set[str] = set()
+        for s_fp, d_fp in self.db.execute(
+            "SELECT REPLACE(ns.file_path,'\\','/'), REPLACE(nd.file_path,'\\','/') "
+            "FROM edges e JOIN nodes ns ON ns.id=e.src_node JOIN nodes nd ON nd.id=e.dst_node "
+            "WHERE e.kind IN ('depends_on','calls') "
+            "AND ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL"
+        ).fetchall():
+            # a test importing prod marks the prod file tested; the reverse (prod importing a test)
+            # is nonsense and rare, but symmetric handling is cheap and harmless.
+            if s_fp and d_fp:
+                if _is_test_file(s_fp):
+                    tested.add(d_fp)
+                if _is_test_file(d_fp):
+                    tested.add(s_fp)
+        rows = []
+        for rel in files:
+            if rel in tested:
+                continue
+            if not rel.lower().endswith(self._CODE_EXTS):
+                continue
+            if _is_test_file(rel) or self._ENTRY_RE.search(rel.lower()):
+                continue
+            rows.append(self._annotate_file(rel))
+        rows.sort(key=lambda r: (-r["importance"], r["file"]))  # most-important-untested first
+        rows = rows[:max(1, limit)]
+        latency_us = round((time.perf_counter() - t0) * 1_000_000)
+        self._log("untested", None, 0, len(rows), latency_us, consumer, kind="untested")
+        return {"silenced": not rows, "granularity": "file", "untested": rows,
+                "latency_us": latency_us,
+                "note": "no recorded test edge — a deep transitive test link may not show here"}
+
+    # A path-carrying DFS over every node enumerates ALL simple cycles, which is factorial in a
+    # strongly-connected cluster (measured: >1.1M cycles / >15s at just 10 mutually-importing files
+    # — a real risk on a legacy module with circular imports, not just adversarial input). So we
+    # first find strongly-connected COMPONENTS (Tarjan, O(V+E)): a cycle lives entirely inside one
+    # SCC. We then enumerate short representative cycles ONLY inside each SCC, under a hard push
+    # budget. The common case (a few small cycles in an otherwise acyclic graph) is instant; a
+    # pathological SCC is reported as the entangled set + a budget-bounded sample, never a hang.
+    _CYCLE_PUSH_BUDGET = 50_000
+
+    def cycles(self, *, limit: int = 50, consumer: str = "cli") -> dict[str, Any]:
+        """Dependency cycles — file→file import cycles (A imports B imports ... A). Tarjan SCC first
+        (a cycle is confined to one SCC), then a budget-bounded short-cycle enumeration inside each
+        multi-node SCC. Each distinct cycle is canonicalized (rotated to its lexicographically
+        smallest member) so it is reported ONCE regardless of entry point. Bounded — never hangs.
+        0 tokens. `truncated` is True if the push budget cut the enumeration short."""
+        t0 = time.perf_counter()
+        adj = self._depends_on_graph()
+        sccs = self._strongly_connected(adj)  # only components of size > 1 (or a self-loop) cycle
+        found: set[tuple[str, ...]] = set()
+        pushes = 0
+        truncated = False
+        for comp in sccs:
+            if truncated:
+                break
+            comp_set = comp  # restrict the walk to this SCC — edges out of it can't be on a cycle
+            for start in sorted(comp):
+                stack: list[tuple[str, tuple[str, ...]]] = [(start, (start,))]
+                while stack:
+                    node, path = stack.pop()
+                    for nb in adj.get(node, ()):
+                        if nb not in comp_set:
+                            continue
+                        if nb == start:           # closed a cycle back to this start
+                            m = path.index(min(path))
+                            found.add(path[m:] + path[:m])  # canonical rotation
+                        elif nb not in path and len(path) < len(comp_set):
+                            pushes += 1
+                            if pushes > self._CYCLE_PUSH_BUDGET:
+                                truncated = True
+                                stack.clear()
+                                break
+                            stack.append((nb, path + (nb,)))
+                    if truncated:
+                        break
+        cycles = sorted(found, key=lambda c: (len(c), c))[:max(1, limit)]
+        rows = [{"files": list(c), "length": len(c),
+                 "importance": round(max((self._file_importance(f) for f in c), default=0.0), 1)}
+                for c in cycles]
+        rows.sort(key=lambda r: (-r["importance"], r["length"], r["files"]))
+        latency_us = round((time.perf_counter() - t0) * 1_000_000)
+        self._log("cycles", None, 0, len(rows), latency_us, consumer, kind="cycles")
+        note = "file-granular import cycles from the depends_on graph"
+        if truncated:
+            note += " — enumeration truncated at the push budget; a very tangled cluster has more"
+        return {"silenced": not rows, "granularity": "file", "cycles": rows,
+                "truncated": truncated, "latency_us": latency_us, "note": note}
+
+    @staticmethod
+    def _strongly_connected(adj: dict[str, set[str]]) -> list[set[str]]:
+        """Tarjan's SCC, iterative (no recursion-depth limit). Returns only the components that can
+        contain an inter-file cycle: size > 1. (`adj` already drops self-loops — a file "importing
+        itself" is an indexer artifact, not a real cycle — so a 1-node SCC is never a cycle.) O(V+E)."""
+        index: dict[str, int] = {}
+        low: dict[str, int] = {}
+        on_stack: set[str] = set()
+        scc_stack: list[str] = []
+        result: list[set[str]] = []
+        counter = 0
+        nodes = set(adj) | {d for deps in adj.values() for d in deps}
+        for root in sorted(nodes):
+            if root in index:
+                continue
+            # work stack of (node, iterator-of-neighbors); emulate recursion iteratively
+            work: list[tuple[str, list[str]]] = [(root, sorted(adj.get(root, ())))]
+            index[root] = low[root] = counter
+            counter += 1
+            scc_stack.append(root)
+            on_stack.add(root)
+            while work:
+                node, nbrs = work[-1]
+                advanced = False
+                while nbrs:
+                    nb = nbrs.pop(0)
+                    if nb not in index:
+                        index[nb] = low[nb] = counter
+                        counter += 1
+                        scc_stack.append(nb)
+                        on_stack.add(nb)
+                        work.append((nb, sorted(adj.get(nb, ()))))
+                        advanced = True
+                        break
+                    elif nb in on_stack:
+                        low[node] = min(low[node], index[nb])
+                if advanced:
+                    continue
+                # done with node — if it's an SCC root, pop the component
+                if low[node] == index[node]:
+                    comp: set[str] = set()
+                    while True:
+                        w = scc_stack.pop()
+                        on_stack.discard(w)
+                        comp.add(w)
+                        if w == node:
+                            break
+                    if len(comp) > 1:   # adj has no self-loops, so a singleton SCC never cycles
+                        result.append(comp)
+                work.pop()
+                if work:  # propagate low-link up to the parent
+                    parent = work[-1][0]
+                    low[parent] = min(low[parent], low[node])
+        return result
+
     def contested_spots(self, *, churn: dict[str, int] | None = None, repo: str | Path | None = None,
                         min_churn: int = 2, limit: int = 20) -> list[dict[str, Any]]:
         """Uncertainty hotspots — the code the team kept changing (Wave B, ADR-019).
@@ -619,22 +1593,30 @@ class Index:
 
     def _file_drift(self, rel: str) -> str | None:
         """The worst drift level recorded on any node pinned to this file, or None if
-        the index was never freshened. 'uncommitted' (edited) outranks 'committed'
-        (drifted) outranks 'fresh' — so the briefing shows the loudest warning."""
-        rank = {"uncommitted": 3, "committed": 2, "fresh": 1}
+        the index was never freshened. 'broken' (a claim's check now FAILS, arrow 1)
+        is the loudest, then 'uncommitted' (edited), then 'committed' (drifted), then
+        'fresh' — so the briefing shows the loudest warning. (broken added 2026-06-15;
+        without it a BROKEN-only file fell through to None and read as fresh.)"""
+        rank = {"broken": 4, "uncommitted": 3, "committed": 2, "fresh": 1}
+        # One JOIN instead of N+1: this used to fetch the file's node ids, then issue a
+        # separate meta lookup per node (~99 queries for a big file — the bulk of brief()'s
+        # SQL round-trips, perf pass 2026-06-18). Join nodes→meta on the drift:<id> key and
+        # take the worst level in a single pass.
         worst = None
         worst_rank = 0
         rows = self.db.execute(
-            "SELECT id FROM nodes WHERE REPLACE(file_path,'\\','/')=?", (rel,)
+            "SELECT m.value FROM nodes n "
+            "JOIN meta m ON m.key = 'drift:' || n.id "
+            "WHERE REPLACE(n.file_path,'\\','/')=?",
+            (rel,),
         ).fetchall()
-        for (nid,) in rows:
-            level = self._node_drift(nid)
+        for (level,) in rows:
             if level and rank.get(level, 0) > worst_rank:
                 worst, worst_rank = level, rank[level]
         return worst
 
     def onboarding(self, *, top_k: int = 12, dec_k: int = 8, task_k: int = 12,
-                   contested_k: int = 6) -> dict[str, Any]:
+                   contested_k: int = 6, broken_k: int = 6, consumer: str = "cli") -> dict[str, Any]:
         """"Explain me this repo" — Wave C, ADR-020. The generated path a new dev (or a
         fresh AI session) needs to get oriented, from the already-indexed graph:
 
@@ -647,6 +1629,7 @@ class Index:
         Reuses the Wave A/B building blocks (importance, contested_spots). Read-only,
         model-free (ADR-014): pure SQL + arithmetic, 0 tokens, offline. An empty index
         returns an empty-but-shaped dict, never an error."""
+        t0 = time.perf_counter()
         # top files: one row per file = its most important code-symbol's importance.
         file_rows = self.db.execute(
             """
@@ -731,6 +1714,25 @@ class Index:
         except Exception:
             contested = []
 
+        # 🔴 BROKEN claims (workstream B, arrow 1): nodes whose stamped check FAILS its
+        # re-run NOW. The SINGLE SOURCE is the persisted meta 'drift:<id>'='broken' rows —
+        # exactly what freshen()/merge_signal write and what _file_drift/_node_drifts read,
+        # so the pushed flag, the brief() field and the dashboard all derive from one place.
+        # Loudest (most load-bearing) first, capped; the honest TOTAL drives counts['broken'].
+        broken_rows = self.db.execute(
+            "SELECT n.id, n.title, REPLACE(n.file_path,'\\','/') AS f, n.predicate "
+            "FROM nodes n JOIN meta m ON m.key = 'drift:' || n.id "
+            "WHERE m.value = 'broken' "
+            "ORDER BY n.importance DESC, n.id DESC LIMIT ?",
+            (broken_k,),
+        ).fetchall()
+        broken = [{"node_id": r["id"], "title": r["title"], "file": r["f"],
+                   "predicate": r["predicate"]} for r in broken_rows]
+        broken_total = self.db.execute(
+            "SELECT COUNT(*) FROM nodes n JOIN meta m ON m.key = 'drift:' || n.id "
+            "WHERE m.value = 'broken'"
+        ).fetchone()[0]
+
         counts = {
             "files": self.db.execute(
                 "SELECT COUNT(DISTINCT file_path) FROM nodes WHERE kind='code-symbol' "
@@ -739,17 +1741,246 @@ class Index:
                 "SELECT COUNT(*) FROM nodes WHERE kind IN ('lesson','decision')").fetchone()[0],
             "decisions": len(decisions),
             "open_tasks": len(in_progress),
+            "broken": broken_total,
             "commits": self.db.execute(
                 "SELECT COUNT(*) FROM nodes WHERE kind='commit'").fetchone()[0],
         }
+        # activity-console signal (v7): one row per explain/onboarding call.
+        self._log("explain", None, 0, 1,
+                  round((time.perf_counter() - t0) * 1_000_000), consumer, kind="explain")
         return {
             "repo_files": counts["files"],
             "top_files": top_files,
             "decisions": decisions,
             "in_progress": in_progress,
             "contested": contested,
+            "broken": broken,
             "counts": counts,
         }
+
+    # ---------------------------------------------- the in-the-path state block (adoption fix)
+    # The adoption gap (2026-06-17, 11-agent verified): recall's first link — the AI choosing
+    # to call it — routes through the one faculty recall's thesis says is unreliable, secured
+    # only by skimmable prose. The highest-leverage fix is NOT a hook: render the live state
+    # into the instruction file every client already loads into its system prompt (CLAUDE.md /
+    # AGENTS.md / .cursor/rules / copilot-instructions), regenerated on every commit. The AI
+    # doesn't CALL recall; it reads the context it always reads, and recall is in it. This
+    # converts the big, fixable failure-to-CALL into the irreducible failure-to-ACT (the trade
+    # we want). It is coarse (repo/file-level, not the exact edit-time file) and 0 model tokens.
+    STATE_BEGIN = "<!-- recall:begin (auto-generated — do not edit by hand) -->"
+    STATE_END = "<!-- recall:end -->"
+
+    def render_state_block(self, *, top_k: int = 6, dec_k: int = 5, task_k: int = 6,
+                           landmine_k: int = 8) -> str:
+        """The recall STATE block for the repo's instruction file — what every AI should
+        carry in its system prompt WITHOUT calling a tool. Negation-first (kills the
+        'recall is search' prior), then the live load-bearing facts. Read-only, 0 tokens.
+
+        Returned WITHOUT the begin/end markers — `sync_context_files` wraps + writes it,
+        so the same body can also be shown by the CLI."""
+        ob = self.onboarding(top_k=top_k, dec_k=dec_k, task_k=task_k, consumer="state")
+        L: list[str] = []
+        L.append("## recall — this project's memory (read before you act)")
+        L.append("")
+        L.append("recall is NOT search and NOT a token-saver (that's a side effect). It is the "
+                 "project's write-time memory: *why* each file is the way it is, *what breaks* "
+                 "if you touch it, *what's in flight*, and the *real name* to search for — "
+                 "stamped at commit time, read back offline at 0 model tokens.")
+        L.append("")
+        L.append("**Before editing a file, run `recall brief <file>` first** (orient → then "
+                 "grep/read to locate → then edit). Before grepping a name you're guessing, "
+                 "run `recall resolve <guess>`. The facts below are a *coarse* snapshot — "
+                 "`brief` is the precise, per-file version.")
+        L.append("")
+
+        if ob["top_files"]:
+            L.append("**Load-bearing files (start here):**")
+            for f in ob["top_files"][:top_k]:
+                L.append(f"- `{f['file']}` (importance {f['importance']})")
+            L.append("")
+
+        if ob["decisions"]:
+            L.append("**Must-know decisions (do not silently undo these):**")
+            for d in ob["decisions"][:dec_k]:
+                title = (d["title"] or "").split("\n", 1)[0][:120]
+                L.append(f"- {title}")
+            L.append("")
+
+        # landmines across the load-bearing files — the warns_about lessons that exist ONLY
+        # in recall and that a cold agent steps on. This is the calibration payload.
+        seen_mine: set[str] = set()
+        mines: list[str] = []
+        for f in ob["top_files"]:
+            for w in self._landmines(f["file"], limit=2):
+                key = w.get("title", "")[:80]
+                if key and key not in seen_mine:
+                    seen_mine.add(key)
+                    mines.append((w.get("title") or "").split("\n", 1)[0][:140])
+                if len(mines) >= landmine_k:
+                    break
+            if len(mines) >= landmine_k:
+                break
+        if mines:
+            L.append("**Landmines (past mistakes — recall warns about these):**")
+            for m in mines:
+                L.append(f"- ⚠ {m}")
+            L.append("")
+
+        # 🔴 BROKEN claims (workstream B, arrow 1) — a stamped why whose own re-check FAILS
+        # right now: treat its claim as wrong until re-verified. Emitted ONLY when there is at
+        # least one (so an all-green repo's block is byte-identical to before). Lean on purpose
+        # — claim title + a `recall brief` pointer, NOT the predicate regex — so the cached
+        # block stays small and stable for an unchanged broken-set.
+        if ob["counts"].get("broken", 0) > 0:
+            L.append("**🔴 BROKEN claims (a stamped why FAILS its own re-check NOW — "
+                     "treat as wrong until re-verified):**")
+            for b in ob.get("broken", []):
+                title = (b["title"] or "").split("\n", 1)[0][:120]
+                where = f" — `recall brief {b['file']}`" if b.get("file") else ""
+                L.append(f"- 🔴 {title}{where}")
+            extra = ob["counts"]["broken"] - len(ob.get("broken", []))
+            if extra > 0:
+                L.append(f"- …and {extra} more — `recall explain`")
+            L.append("")
+
+        if ob["in_progress"]:
+            L.append("**In progress right now (standing intent — treat like a failing test):**")
+            for t in ob["in_progress"][:task_k]:
+                where = f" — `{t['file']}`" if t.get("file") else ""
+                L.append(f"- {(t['title'] or '')[:120]}{where}")
+            L.append("")
+
+        # Build/share settings the owner has set (config.toml [share]) — INJECTED so any
+        # AI session carries the active rules without asking. Lets an agent honour
+        # "new notes are private here" and know how the brain is shared. Only shown when
+        # it actually matters (a non-default that changes how the AI should stamp/share).
+        try:
+            from recall.config import load_build_config
+            _repo = self._repo or _infer_repo(self._db_path)
+            cfg = load_build_config(_repo)
+            sl: list[str] = []
+            if cfg.default_visibility == "private":
+                # the owner's deliberate, non-default choice — the AI must know new
+                # notes stay local here (and that sharing needs `recall export`).
+                sl.append("- **New stamps default to PRIVATE** here — they stay on this machine "
+                          "and are left out of `recall export`. To share knowledge, stamp it and "
+                          "run `recall export`; the raw `.mind` is never committed (a pre-commit "
+                          "guard blocks a leak).")
+            if sl:
+                L.append("**Build & share settings (owner-set):**")
+                L.extend(sl)
+                L.append("")
+        except Exception:
+            pass  # settings are advisory in the state block — never break it
+
+        c = ob["counts"]
+        L.append(f"_recall knows {c['files']} files · {c['lessons']} lessons · "
+                 f"{c['open_tasks']} open tasks. Full picture: `recall explain`; "
+                 f"per-file: `recall brief <file>`. Read path = 0 model tokens._")
+        block = "\n".join(L)
+        # workstream E: record the published state-block SIZE on the consumer='state' row that
+        # onboarding() just wrote — thread it in, NEVER a second row (no double-count). Best-effort.
+        try:
+            self.db.execute(
+                "UPDATE access_log SET resp_chars=? WHERE rowid=("
+                "SELECT rowid FROM access_log WHERE consumer='state' ORDER BY rowid DESC LIMIT 1)",
+                (len(block),))
+            self.db.commit()
+        except sqlite3.OperationalError:
+            pass
+        return block
+
+    @staticmethod
+    def _verdict_tag(drift: str | None, predicate: str | None) -> str:
+        """Axis-3 trust label for a surfaced claim. Empty for a claim with NO predicate; for a
+        predicate-backed claim an HONEST verdict from the SAME drift the brief() return carries
+        (broken→🔴, fresh→🟢 holds, else ⚪ unverified) — never a false CONFIRMED, never a second
+        evaluator. So every predicate-backed claim a push surfaces carries its trust status."""
+        if not predicate:
+            return ""
+        if drift == "broken":
+            return "  🔴 BROKEN (its re-check fails now)"
+        if drift == "fresh":
+            return "  🟢 check holds"
+        return "  ⚪ check unverified"  # None (never freshened) or committed/uncommitted (drifted)
+
+    def _situational_file_lines(self, rel: str, b: dict[str, Any]) -> list[str]:
+        """Lean per-file push lines: landmines LEAD (the conscience signal), then the live BROKEN
+        trust-status, open tasks, and the top why — each predicate-backed claim labeled (axis-3).
+        Returns [] for a known-but-empty file so it contributes nothing."""
+        out: list[str] = [f"**{rel}**"]
+        for w in (b.get("warns") or [])[:3]:
+            tag = self._verdict_tag(w.get("drift"), w.get("predicate"))
+            out.append(f"- 🔴 landmine: {(w.get('title') or '').split(chr(10), 1)[0][:120]}{tag}")
+        if b.get("drift") == "broken":
+            out.append("- 🔴 a stamped claim about this file FAILS its re-check NOW — "
+                       "treat its WHY as wrong until re-verified")
+        elif b.get("drift") in ("committed", "uncommitted"):
+            out.append("- ⚠ this file drifted since some knowledge was stamped — verify before trusting it")
+        for t in (b.get("open_tasks") or [])[:2]:
+            out.append(f"- 📋 open task: {(t.get('title') or '')[:120]}")
+        for w in (b.get("why") or [])[:2]:
+            tag = self._verdict_tag(w.get("drift"), w.get("predicate"))
+            out.append(f"- why: {(w.get('title') or '').split(chr(10), 1)[0][:120]}{tag}")
+        out.append("")
+        return out if len(out) > 2 else []  # header + blank only → nothing useful
+
+    def _situational_task_lines(self, task: str, *, top_k: int = 3) -> list[str]:
+        """Task-scoped push lines: the most relevant stamped knowledge + one analogous precedent.
+        Reuses recall()/precedent() (consumer='push') — no new query path."""
+        out: list[str] = []
+        r = self.recall(task, topk=top_k, consumer="push")
+        know = (r.get("knowledge") or [])[:top_k] if not r.get("silenced") else []
+        if know:
+            out.append("**relevant past knowledge:**")
+            for k in know:
+                tag = self._verdict_tag(k.get("drift"), k.get("predicate"))
+                out.append(f"- {(k.get('title') or '').split(chr(10), 1)[0][:120]}{tag}")
+        pre = self.precedent(task, limit=1, consumer="push")
+        plist = pre.get("precedents") or []
+        if plist:
+            out.append(f"**precedent (we faced this before):** "
+                       f"{(plist[0].get('title') or '').split(chr(10), 1)[0][:120]}")
+        if out:
+            out.append("")
+        return out
+
+    def render_situational_block(self, *, focus_file: str | None = None,
+                                 diff_files: list[str] | None = None,
+                                 task: str | None = None, top_k: int = 3) -> str:
+        """SITUATIONAL push (workstream A): the scoped brief + landmines + live BROKEN trust-status
+        for what the agent is doing NOW — the file about to be edited, the working diff, the stated
+        task — fused from brief()/recall()/precedent(), which ALREADY carry the predicate verdict
+        (workstream B), so this RENDERS the verdict, never re-evaluates it.
+
+        Unlike the repo-static render_state_block() (cached in the system prompt → ~0 tokens/turn),
+        this is FRESH tokens each call, so it is kept terse. With NO situational signal it delegates
+        to render_state_block() — the repo-static block is the universal floor. Read-only and
+        model-free; the only writes are access_log rows tagged consumer='push'."""
+        files: list[str] = []
+        if focus_file:
+            files.append(focus_file.replace("\\", "/"))
+        for f in (diff_files or []):
+            rf = (f or "").replace("\\", "/")
+            if rf and rf not in files:
+                files.append(rf)
+
+        L: list[str] = []
+        for rel in files[:5]:
+            b = self.brief(rel, consumer="push")
+            if b.get("known"):
+                L.extend(self._situational_file_lines(rel, b))
+        if task:
+            L.extend(self._situational_task_lines(task, top_k=top_k))
+
+        if not L:
+            return self.render_state_block()  # no situational signal → the static floor
+
+        head = ["## recall — situational memory for what you're doing NOW",
+                "_Fresh per prompt (not cached). The repo-wide picture is the recall block already "
+                "in your system prompt; this is scoped to your current focus. Read-only, 0 tool calls._",
+                ""]
+        return "\n".join(head + L).rstrip()
 
     def _file_importance(self, rel: str) -> float:
         """A file's own causal importance = its most important code-symbol (0 if unknown).
@@ -908,6 +2139,24 @@ class Index:
             return {"checked": 0, "fresh": 0, "committed": 0, "uncommitted": 0, "no_git": True}
         return _freshen(self, target)
 
+    def _node_drifts(self, node_ids: list[int]) -> dict[int, str]:
+        """Batch the per-node drift lookup: one query for a set of nodes instead of one
+        query each (the why-list and landmines both annotate ≤k rows — perf pass 2026-06-18).
+        Returns {node_id: level} only for nodes that have a recorded drift level."""
+        if not node_ids:
+            return {}
+        keys = [f"drift:{n}" for n in node_ids]
+        ph = ",".join("?" * len(keys))
+        out: dict[int, str] = {}
+        for key, val in self.db.execute(
+            f"SELECT key, value FROM meta WHERE key IN ({ph})", keys
+        ).fetchall():
+            try:
+                out[int(key.split(":", 1)[1])] = val
+            except (ValueError, IndexError):
+                continue
+        return out
+
     def _node_drift(self, node_id: int) -> str | None:
         """The drift level the last freshen() recorded for this node, or None if
         the index was never freshened (freshness unknown -> shown fresh)."""
@@ -915,6 +2164,51 @@ class Index:
             "SELECT value FROM meta WHERE key=?", (f"drift:{node_id}",)
         ).fetchone()
         return row[0] if row else None
+
+    # source extensions where a code-anchor predicate makes sense — a claim about a
+    # lockfile/data/doc has no stable code token to pin (keeps the nudge from misfiring).
+    _PRED_CODE_EXTS = frozenset(
+        ("py", "js", "ts", "jsx", "tsx", "go", "rs", "java", "rb", "php",
+         "c", "cc", "cpp", "h", "hpp", "cs", "swift", "kt", "scala"))
+
+    @staticmethod
+    def suggest_predicate_from_diff(file_rel: str, added_lines: list[str]) -> str | None:
+        """Deterministic, model-free predicate SUGGESTION for a claim-bearing change: propose a
+        single `contains:<escaped-anchor>` pinned to a high-signal token in the diff's ADDED
+        lines, so an author can add a free re-check (a `Recall-predicate:` trailer). stdlib `re`
+        ONLY — never an LLM, never a parser. Returns None aggressively on low signal (a noisy
+        nudge just trains the agent to ignore it). Every non-None return is GUARANTEED to
+        round-trip through `parse_predicate()` and survive `stamp()`'s validators (len<=500,
+        ReDoS-shape reject, parse) — verified here, not assumed."""
+        ext = file_rel.rsplit(".", 1)[-1].lower() if file_rel and "." in file_rel else ""
+        if ext not in Index._PRED_CODE_EXTS:
+            return None  # not a source file — no stable code anchor to pin
+        # prefer the most stable, claim-defining tokens: a def/class/function NAME, then an
+        # ALL-CAPS constant. A future edit that weakens the claim has to remove that token.
+        deflike = re.compile(r"^\s*(?:export\s+)?(?:async\s+)?(?:def|class|function)\s+([A-Za-z_]\w{2,})\b")
+        constlike = re.compile(r"^\s*(?:export\s+)?(?:const\s+)?([A-Z][A-Z0-9_]{3,})\s*[:=]")
+        anchor = None
+        for line in (added_lines or []):
+            m = deflike.match(line)
+            if m:
+                anchor = m.group(1)
+                break
+        if anchor is None:
+            for line in (added_lines or []):
+                m = constlike.match(line)
+                if m:
+                    anchor = m.group(1)
+                    break
+        if anchor is None:
+            return None  # low signal — stay quiet
+        cand = f"contains:{re.escape(anchor)}"
+        # GUARANTEE the contract the nudge promises: a pasted suggestion must parse AND survive
+        # stamp(). re.escape of an identifier is a literal pattern (short, no ReDoS shape), but
+        # we verify rather than assume — if it somehow fails the gate, suggest nothing.
+        from recall.predicate import parse_predicate
+        if len(cand) > 500 or parse_predicate(cand) is None:
+            return None
+        return cand
 
     def _dedupe_results(self, scored: list[tuple]) -> list[tuple]:
         """Collapse rows that point at the same knowledge — git history often has
@@ -933,6 +2227,8 @@ class Index:
                 "SELECT title, file_path, kind, symbol, line FROM nodes WHERE id=?",
                 (node_id,),
             ).fetchone()
+            if row is None:
+                continue  # deleted by another process (dashboard forget/undo) mid-query
             if row["kind"] == "code-symbol":
                 key = ("code", row["file_path"], row["symbol"], row["line"], node_id)
             else:
@@ -944,12 +2240,17 @@ class Index:
         return out
 
     # -------------------------------------------------------- 3-level builder
-    def _build_levels(self, node_id: int, hits: int, score: float, toks: set[str]) -> dict[str, Any]:
+    def _build_levels(self, node_id: int, hits: int, score: float, toks: set[str]) -> dict[str, Any] | None:
         n = self.db.execute(
             "SELECT kind,title,body,file_path,symbol,line,stamped_at_sha,origin "
             "FROM nodes WHERE id=?",
             (node_id,),
         ).fetchone()
+        if n is None:
+            # the node was deleted by another process (dashboard forget()/undo_power_run())
+            # in the window between scoring and building — skip it, don't deref None.
+            # (P2 bug-hunt 2026-06-15.) Caller filters None.
+            return None
         matched = sorted(
             t for t in toks
             if self.db.execute(
@@ -958,12 +2259,28 @@ class Index:
             ).fetchone()
         )
         # Level 3: relation — multi-hop walk over typed edges (recursive CTE).
+        # CYCLE-SAFE via UNION, not UNION ALL (bug-hunt MEDIUM, 2026-06-17).
+        # co_changed edges are stored bidirectionally (record_co_change inserts
+        # both (a,b) and (b,a)), so the files touched in one session form a
+        # fully-connected bidirectional clique. The old `UNION ALL` walk enumerated
+        # EVERY path through that clique — the intermediate row count grew
+        # multiplicatively with clique size (a synthetic 60-node clique took ~190 ms)
+        # — even though the final `SELECT DISTINCT` deduped the OUTPUT. `hop < 3`
+        # already bounds the recursion DEPTH (so it always terminates); switching to
+        # `UNION` dedups the per-hop rows so the clique can't multiply within a level.
+        # Measured on this repo's own index: byte-for-byte identical output to the
+        # old query on all 30 busiest nodes, ~3x faster (6.5 ms -> 2.2 ms worst case).
+        # This mirrors the deliberate `UNION` choice already made in the sibling
+        # supersedes-chain CTE ("UNION (not UNION ALL) dedups, so a cycle terminates").
+        # NB: a path-visited-set guard was tried and rejected — it was both SLOWER
+        # (string LIKE per edge) and changed output (it dropped real relations that
+        # were only reachable via a cyclic return through the clique).
         relation = self.db.execute(
             """
             WITH RECURSIVE walk(src, dst, kind, sha, verified, hop) AS (
                 SELECT src_node, dst_node, kind, stamped_at_sha, verified, 1
                   FROM edges WHERE src_node = ?
-                UNION ALL
+                UNION
                 SELECT e.src_node, e.dst_node, e.kind, e.stamped_at_sha, e.verified, w.hop + 1
                   FROM edges e JOIN walk w ON e.src_node = w.dst WHERE w.hop < 3
             )
@@ -1006,8 +2323,11 @@ class Index:
         }
 
     def _invalidate_corpus_stats(self) -> None:
-        """Drop the cached BM25 corpus stats — called by every anchor/node mutation."""
+        """Drop the cached BM25 corpus stats AND the cached resolver — called by every
+        anchor/node mutation. Both are derived from the node/anchor tables, so any stamp,
+        reindex, or edge change must rebuild them on next use (correctness over the speedup)."""
         self._corpus_stats = None
+        self._resolver = None
 
     def _cap_query_tokens(self, toks: list[str]) -> list[str]:
         """Cap an oversized query at the _QUERY_TOKEN_CAP RAREST tokens.
@@ -1021,13 +2341,21 @@ class Index:
         change. Deterministic: ties break lexicographically."""
         if len(toks) <= _QUERY_TOKEN_CAP:
             return toks
-        ph = ",".join("?" * len(toks))
-        df = dict(self.db.execute(
-            f"SELECT a.term, COUNT(na.node_id) FROM anchors a "
-            f"JOIN node_anchors na ON na.anchor_id = a.id "
-            f"WHERE a.term IN ({ph}) GROUP BY a.term",
-            list(toks),
-        ).fetchall())
+        # Batch the df lookup in 999-safe chunks — a huge paste (a whole file's worth of
+        # unique tokens) would otherwise bind one '?' per token in a single IN and trip
+        # SQLite's SQLITE_MAX_VARIABLE_NUMBER ("too many SQL variables"). The sibling lens
+        # query already batches at 500 for exactly this reason. (P2 bug-hunt 2026-06-15.)
+        toks_list = list(toks)
+        df: dict[str, int] = {}
+        for i in range(0, len(toks_list), 500):
+            batch = toks_list[i:i + 500]
+            ph = ",".join("?" * len(batch))
+            df.update(self.db.execute(
+                f"SELECT a.term, COUNT(na.node_id) FROM anchors a "
+                f"JOIN node_anchors na ON na.anchor_id = a.id "
+                f"WHERE a.term IN ({ph}) GROUP BY a.term",
+                batch,
+            ).fetchall())
         # Known-rare first (the safest bridges into existing knowledge), then unknown
         # terms (df 0 exact — may still match via porter stemming), common terms cut
         # first. A plain df sort would let 40 unseen edit-text identifiers evict the
@@ -1236,6 +2564,146 @@ class Index:
             best.items(), key=lambda kv: (-_RANK.get(kv[1][0], 0), -kv[1][1]))[:limit]
         return [{"file": fp, "kind": k, "importance": round(imp, 1)} for fp, (k, imp) in ordered]
 
+    def _landmines(self, file_path: str | None, *, limit: int = 10) -> list[dict]:
+        """Landmines on this file — the lessons/decisions/commits that `warns_about` its
+        code. This is the CONSCIENCE signal of the deviation push (arrow 2): a past mistake
+        marked here surfaces UNPROMPTED in the pre-edit briefing, so an AI is warned BEFORE
+        it repeats it — not only when it thinks to ask (recall() already serves these on a
+        PULL; brief() left them out, so the push never fired — dogfood gap 2026-06-15).
+
+        The mirror of _blast_radius, but over `warns_about` edges pointing INTO this file's
+        nodes; what I surface is the WARNING SOURCE (the lesson), not the warned-about code.
+        A warning that lives in another file (or is pinned to none) still fires here — that
+        is exactly the case `why` (file_path-pinned only) cannot reach. Read-only, model-free,
+        fleet-safe (a pure SELECT); ordered by importance then recency, drift carried so a
+        stale warning is flagged rather than trusted blindly.
+
+        Resolves a landmine to this file TWO ways (adversarial sweep 2026-06-15 found the
+        symbol path was a silent false-negative — `warns_about -> <symbol>`, the documented
+        way to mark one, created an orphan node keyed by the symbol name that the path-only
+        query missed): by file PATH (the target pinned to this file) OR by SYMBOL (the target
+        names a symbol this file defines). A warning whose source was SUPERSEDED is dropped —
+        a landmine must not fire after the lesson that set it was replaced."""
+        if not file_path:
+            return []
+        rel = file_path.replace("\\", "/")
+        rows = self.db.execute(
+            """
+            WITH file_syms(name) AS (
+                SELECT LOWER(symbol) FROM nodes
+                 WHERE REPLACE(file_path,'\\','/')=? AND symbol IS NOT NULL
+                UNION
+                SELECT LOWER(title) FROM nodes
+                 WHERE REPLACE(file_path,'\\','/')=? AND kind='code-symbol'
+            )
+            SELECT ns.id, ns.kind, ns.title, ns.body, ns.stamped_at_sha, ns.importance
+              FROM nodes nd
+              JOIN edges e ON e.dst_node = nd.id
+              JOIN nodes ns ON ns.id = e.src_node
+             WHERE e.kind = 'warns_about'
+               AND ( REPLACE(nd.file_path,'\\','/') = ?
+                     OR LOWER(nd.title) IN (SELECT name FROM file_syms)
+                     OR LOWER(nd.symbol) IN (SELECT name FROM file_syms) )
+               AND NOT EXISTS (
+                     SELECT 1 FROM edges sup
+                      WHERE sup.dst_node = ns.id AND sup.kind = 'supersedes')
+             GROUP BY ns.id
+             ORDER BY ns.importance DESC, ns.id DESC
+             LIMIT ?
+            """,
+            (rel, rel, rel, limit),
+        ).fetchall()
+        drifts = self._node_drifts([r["id"] for r in rows])  # one query, not per-landmine
+        return [
+            {
+                "node_id": r["id"], "kind": r["kind"], "title": r["title"],
+                "why": (r["body"] or "").splitlines()[0] if r["body"] else "",
+                "sha": (r["stamped_at_sha"] or "")[:7],
+                "drift": drifts.get(r["id"]),
+            }
+            for r in rows
+        ]
+
+    def _no_precedent(self, situation: str, reason: str, t0: float,
+                      *, latency_us: int | None = None) -> dict[str, Any]:
+        """The shaped empty precedent result (mirrors _silenced for recall) — never an error,
+        so a caller can always read `.precedents`."""
+        return {
+            "situation": situation,
+            "silenced": True,
+            "reason": reason,
+            "latency_us": latency_us if latency_us is not None
+                          else round((time.perf_counter() - t0) * 1_000_000),
+            "precedents": [],
+        }
+
+    def _precedent_outcome(self, node_id: int, score: float, n) -> dict[str, Any]:
+        """Attach a precedent's FATE — the thing that makes it a precedent and not just a
+        search hit: the decision that superseded it, whether it was promoted to a landmine,
+        and its drift.
+
+        supersedes is (newer)->(older) [see _landmines], so we walk dst=this BACKWARDS to the
+        head of the chain — the decision that governs NOW. UNION (not UNION ALL) dedups, so a
+        cycle terminates; depth is capped as defense-in-depth and the deepest (id-tie-broken)
+        row is the current rule. Read-only."""
+        head = self.db.execute(
+            """
+            WITH RECURSIVE chain(id, depth) AS (
+                SELECT src_node, 1 FROM edges WHERE dst_node=? AND kind='supersedes'
+                UNION
+                SELECT e.src_node, c.depth+1 FROM edges e JOIN chain c ON e.dst_node=c.id
+                 WHERE e.kind='supersedes' AND c.depth < 16
+            )
+            SELECT ch.id, nd.title FROM chain ch JOIN nodes nd ON nd.id=ch.id
+             ORDER BY ch.depth DESC, ch.id DESC LIMIT 1
+            """,
+            (node_id,),
+        ).fetchone()
+        superseded_by = {"node_id": head["id"], "title": head["title"]} if head else None
+        became_landmine = bool(self.db.execute(
+            "SELECT 1 FROM edges WHERE src_node=? AND kind='warns_about' LIMIT 1",
+            (node_id,)).fetchone())
+        return {
+            "node_id": node_id,
+            "kind": n["kind"],
+            "title": n["title"],
+            "what": (n["body"] or "").splitlines()[0] if n["body"] else "",
+            "relevance": round(score, 2),
+            "importance": round(n["importance"] or 0, 1),
+            "sha": (n["stamped_at_sha"] or "")[:7],
+            "drift": self._node_drift(node_id),
+            "file": (n["file_path"] or "").replace("\\", "/") or None,
+            "outcome": "superseded" if superseded_by else "standing",
+            "superseded_by": superseded_by,
+            "became_landmine": became_landmine,
+        }
+
+    def _resolve_to_files(self, target: str) -> set[str]:
+        """Resolve an impact target to the file(s) it lives in. Order matters: a KNOWN file path
+        wins first (so a root-level 'lib.py' with no slash is still a file, not a symbol); else a
+        bare name resolves to the file(s) of the code-symbol(s) that define it (case-insensitive,
+        by symbol or title); else a slash-bearing but unknown path is taken best-effort so impact
+        can still answer (usually empty). Empty set when nothing matches at all."""
+        t = (str(target) if target is not None else "").strip().replace("\\", "/")
+        t = t[2:] if t.startswith("./") else t  # sweep #5: './a.py' must resolve like 'a.py'
+        t = t.rstrip("/")                         # sweep #5/#19: trailing slash / non-str must not crash or mask
+        if not t:
+            return set()
+        if self.db.execute(
+            "SELECT 1 FROM nodes WHERE REPLACE(file_path,'\\','/')=? LIMIT 1", (t,)
+        ).fetchone():
+            return {t}
+        rows = self.db.execute(
+            "SELECT DISTINCT REPLACE(file_path,'\\','/') AS f FROM nodes "
+            "WHERE kind='code-symbol' AND file_path IS NOT NULL AND file_path != '' "
+            "AND (LOWER(symbol)=? OR LOWER(title)=?)",
+            (t.lower(), t.lower()),
+        ).fetchall()
+        files = {r["f"] for r in rows if r["f"]}
+        if files:
+            return files
+        return {t} if "/" in t else set()
+
     def _file_dependencies(self, file_path: str | None, *, limit: int = 8) -> list[dict]:
         """The files this file depends on (static depends_on graph), deduped by target
         file. Empty when the hit isn't file-pinned or has no AST edges. Read-only, fast."""
@@ -1286,14 +2754,15 @@ class Index:
     # ----------------------------------------------------------- write helpers
     def _insert_node(
         self, kind, title, body, facets, file_path, symbol, line, sha, origin,
-        power_run=None, base_sha=None, author=None,
+        power_run=None, base_sha=None, author=None, predicate=None, outcome=None,
+        visibility="team",
     ) -> int:
         cur = self.db.execute(
             "INSERT INTO nodes"
-            "(kind,title,body,facets,file_path,symbol,line,stamped_at_sha,origin,power_run,base_sha,author) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(kind,title,body,facets,file_path,symbol,line,stamped_at_sha,origin,power_run,base_sha,author,predicate,outcome,visibility) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (kind, title, body, ",".join(facets), file_path, symbol, line, sha, origin,
-             power_run, base_sha, author),
+             power_run, base_sha, author, predicate, outcome, visibility),
         )
         return int(cur.lastrowid)
 
@@ -1617,13 +3086,37 @@ class Index:
             latency_us = round((time.perf_counter() - t0) * 1_000_000)
         return {"silenced": True, "reason": reason, "latency_us": latency_us, "results": []}
 
-    def _log(self, query, node_id, score, surfaced, latency_us, consumer) -> None:
-        self.db.execute(
-            "INSERT INTO access_log(query,node_id,score,surfaced,latency_us,consumer) "
-            "VALUES(?,?,?,?,?,?)",
-            (query, node_id, float(score), surfaced, latency_us, consumer),
-        )
-        self.db.commit()
+    def _log(self, query, node_id, score, surfaced, latency_us, consumer, kind="recall",
+             resp_chars: int = 0) -> None:
+        # `kind` (v7) tags the read-path action — recall / brief / explain / stamp — so the
+        # live activity console can stream a usage proof. `resp_chars` (v10, workstream E) is the
+        # emitted response size; default 0 leaves every existing caller untouched. Best-effort: an
+        # OperationalError on a pre-migration on-disk DB must never break the actual call.
+        try:
+            self.db.execute(
+                "INSERT INTO access_log(query,node_id,score,surfaced,latency_us,consumer,kind,resp_chars) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (query, node_id, float(score), surfaced, latency_us, consumer, kind, int(resp_chars)),
+            )
+            self.db.commit()
+        except sqlite3.OperationalError:
+            pass
+
+    def _record_served(self, served_kind: str, consumer: str, resp_chars: int) -> None:
+        """Record that a response of `resp_chars` chars was EMITTED to `consumer` for `served_kind`
+        — the context-tax measurement (workstream E) — WITHOUT re-running a query/score. Stored as
+        a DISTINCT kind='served' row (the tool name in `query`) so it never inflates the loop-event
+        counts the receipt's MEASURED block reports. A thin best-effort INSERT sibling of _log,
+        recorded at the consumer boundary (mcp.py/cli.py) so the engine stays text-free (ADR-014)."""
+        try:
+            self.db.execute(
+                "INSERT INTO access_log(query,node_id,score,surfaced,latency_us,consumer,kind,resp_chars) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (served_kind, None, 0.0, 0, 0, consumer, "served", int(resp_chars)),
+            )
+            self.db.commit()
+        except sqlite3.OperationalError:
+            pass
 
     # ------------------------------------------------------------------ stats
     def stats(self) -> dict[str, Any]:
@@ -1637,6 +3130,71 @@ class Index:
             ),
             "recalls": g("SELECT COUNT(*) FROM access_log"),
             "surfaced": g("SELECT COUNT(*) FROM access_log WHERE surfaced=1"),
+        }
+
+    def receipt(self, *, window_days: int = 14, interactive_only: bool = True) -> dict[str, Any]:
+        """Money-receipt (workstream C) — the loop recall was IN over a rolling window, in HONEST
+        MEASURED units straight from access_log rows. COUNTS-ONLY: no token/$ figure ships (the
+        modeled block is a deliberate later increment — the measured/modeled wall is structural,
+        ADR-041). Pure SELECT, model-free, 0 tokens.
+
+        `interactive_only` (default) excludes machine/background traffic (consumer 'commit'/'state')
+        but KEEPS 'hook' — a hook recall IS recall helping the agent. `briefed_edits` counts the
+        ack event (the highest-signal 'briefed before editing' proof); distinct files come from the
+        ack's query STRING, since cmd_ack logs node_id=None (a COUNT DISTINCT node_id would collapse
+        every ack into one NULL bucket)."""
+        where = "ts >= strftime('%s','now',?)"
+        params: list[Any] = [f"-{int(max(1, window_days))} days"]
+        if interactive_only:
+            where += " AND consumer NOT IN ('commit','state')"
+        rows = self.db.execute(
+            f"SELECT kind, consumer, query, surfaced FROM access_log WHERE {where}", params,
+        ).fetchall()
+        _READ_KINDS = ("recall", "brief", "resolve", "precedent", "impact", "push",
+                       "callers", "callees", "dead_code", "untested", "cycles")
+        per_kind: dict[str, int] = {}
+        briefed_files: set[str] = set()
+        briefed_edits = recall_calls = surfaced_calls = 0
+        for r in rows:
+            k = r["kind"] or "recall"
+            if k == "served":
+                continue  # workstream E size-measurement rows are NOT loop events — see 'emitted'
+            per_kind[k] = per_kind.get(k, 0) + 1
+            if k == "ack":
+                briefed_edits += 1
+                if r["query"]:
+                    briefed_files.add((r["query"] or "").replace("\\", "/"))
+            if k in _READ_KINDS:
+                recall_calls += 1
+                if r["surfaced"]:  # of the calls recall was consulted on, how many had a hit
+                    surfaced_calls += 1
+        # workstream E: per-consumer EMITTED response size (the context tax, MEASURED in chars).
+        # Sums resp_chars over rows that carry it — the 'served' MCP rows AND the threaded 'state'
+        # block row — so it captures what entered context. Recall-ABSOLUTE only (no jcode arm, no
+        # 2-arm %). Tokens are derived at the CLI boundary (the arms.py contract self-labels which
+        # tokenizer); the engine stays text/tokenizer-free (ADR-014).
+        emit_rows = self.db.execute(
+            "SELECT consumer, COUNT(*) AS serves, COALESCE(SUM(resp_chars),0) AS chars "
+            "FROM access_log WHERE ts >= strftime('%s','now',?) AND resp_chars > 0 "
+            "GROUP BY consumer", [params[0]],
+        ).fetchall()
+        emitted = {(r["consumer"] or "?"): {"serves": r["serves"], "chars": r["chars"]}
+                   for r in emit_rows}
+        return {
+            "window_days": window_days,
+            "interactive_only": interactive_only,
+            # MEASURED only. NO 'modeled' key in the counts-only ship — a token/$ figure may live
+            # ONLY under a future receipt['modeled'] (the wall a drift-guard enforces).
+            "measured": {
+                "briefed_edits": briefed_edits,
+                "distinct_files_briefed": len(briefed_files),
+                "recall_calls": recall_calls,
+                "surfaced_calls": surfaced_calls,
+                "per_kind": per_kind,
+                "total_events": len(rows),
+            },
+            # workstream E — per-consumer emitted CHARS (recall-absolute; tokens derived at the CLI).
+            "emitted": emitted,
         }
 
 
@@ -1657,6 +3215,33 @@ def _fts_match(terms) -> str:
 
 
 _TRAILER_RE = re.compile(r"^(Recall-\w+|Co-Authored-By|Signed-off-by):", re.IGNORECASE)
+
+# A title longer than this is a paragraph, not a headline — split it (see _split_headline).
+_HEADLINE_MAX = 120
+_HEADLINE_MIN = 18   # a headline shorter than this (e.g. "P1 bug fixed:") is a stub, not a headline
+# sentence boundary: a real end-of-sentence ('. ' / '! ' / '? '). A colon is NOT a boundary —
+# it usually INTRODUCES the content ("P1 bug fixed: <the actual point>"), so cutting there
+# leaves a stub headline. We split only at genuine sentence ends.
+_HEADLINE_BREAK = re.compile(r"(?<=[.!?])\s+")
+
+
+def _split_headline(title: str) -> tuple[str, str]:
+    """Split a too-long `title` into (headline, rest) at its first SENTENCE end, so a stamp
+    whose whole summary landed in `title` reads as headline + detail instead of one wall of
+    text repeated across the story chain. Pure string work, no interpretation: we only CUT at
+    a sentence boundary, never rephrase. Returns (title, "") when there is no clean break that
+    yields a sane headline — a single long sentence stays whole (better one long headline than
+    a cut mid-thought, or a stub like "P1 bug fixed:")."""
+    t = (title or "").strip()
+    # scan boundaries left-to-right; take the FIRST that leaves a headline of sane length.
+    for m in _HEADLINE_BREAK.finditer(t):
+        head = t[: m.start()].strip()
+        if len(head) < _HEADLINE_MIN:
+            continue                       # too short -> a stub; keep scanning
+        if len(head) > _HEADLINE_MAX * 2:
+            break                          # first sentence is itself a paragraph -> don't split
+        return head, t[m.end():].strip()
+    return t, ""
 
 
 def _is_trailer_line(line: str) -> bool:

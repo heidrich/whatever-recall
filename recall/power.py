@@ -27,7 +27,14 @@ from recall.power_prompt import build_understanding_prompt, parse_with_report
 # capped so one huge file can't blow the token budget. Both overridable per call.
 DEFAULT_TOP_N = 50
 DEFAULT_FILE_BYTE_CAP = 8_192  # 8 KB of source per hotspot
-DEFAULT_OUTPUT_BUDGET = 400  # est. completion tokens per hotspot (for the cost preview)
+DEFAULT_OUTPUT_BUDGET = 400  # expected completion tokens per hotspot
+# The provider's max_tokens per hotspot is this multiple of the budget — i.e. the model
+# may legitimately emit up to OUTPUT_CAP_MULTIPLIER × the expected budget. The ADR-008
+# preview MUST price against this real ceiling, not the expected budget, or the previewed
+# cost the user approves with --yes understates the worst-case output bill by exactly this
+# factor (bug-hunt MEDIUM, 2026-06-17). One constant feeds BOTH estimate() and the
+# complete() call so the preview is a provable upper bound that can't drift from the send.
+OUTPUT_CAP_MULTIPLIER = 2
 
 # Source files worth understanding. Keep it boring + explicit — bootstrap already
 # indexed these, we just rank a subset for the deep read.
@@ -61,6 +68,12 @@ class Estimate:
     est_cost_usd: float
     model: str
     per_file: list[tuple[str, int]] = field(default_factory=list)  # (path, input_tokens)
+    # The EXACT (system, user) prompts measured during estimation, one per hotspot in
+    # hotspot order. run_power reuses these instead of re-reading each file from disk, so
+    # the approved estimate is provably the prompt that gets sent — closing the TOCTOU
+    # window where an editor save / the dashboard watcher re-indexing between estimate and
+    # send made the billed prompt differ from the previewed one (bug-hunt LOW, 2026-06-17).
+    prompts: list[tuple[str, str]] = field(default_factory=list, repr=False)
 
 
 # ----------------------------------------------------------------- hotspot choice
@@ -131,13 +144,17 @@ def estimate_tokens(
     repo = Path(repo)
     total_input = 0
     per_file: list[tuple[str, int]] = []
+    prompts: list[tuple[str, str]] = []
     for h in hotspots:
         system, user = _prompt_for_hotspot(index, repo, h, file_byte_cap)
         n = provider.count_tokens(system) + provider.count_tokens(user)
         total_input += n
         per_file.append((h.file_path, n))
+        prompts.append((system, user))  # captured ONCE; run_power reuses these exact bytes
 
-    est_output = len(hotspots) * output_budget
+    # Price against the REAL ceiling the run uses (output_budget × the cap multiplier),
+    # not the expected budget — so the previewed cost is a true upper bound (ADR-008).
+    est_output = len(hotspots) * output_budget * OUTPUT_CAP_MULTIPLIER
     return Estimate(
         hotspots=len(hotspots),
         input_tokens=total_input,
@@ -145,6 +162,7 @@ def estimate_tokens(
         est_cost_usd=_estimate_cost(provider, total_input, est_output),
         model=provider.model,
         per_file=per_file,
+        prompts=prompts,
     )
 
 
@@ -182,13 +200,19 @@ def _prompt_for_hotspot(index, repo: Path, h: Hotspot, byte_cap: int) -> tuple[s
 
 def _existing_for(index, h: Hotspot) -> list[dict]:
     """The bootstrap knowledge already attached to this file — fed to the prompt so
-    the model enriches rather than duplicates."""
-    if not h.existing_node_ids:
+    the model enriches rather than duplicates.
+
+    Query the file's lessons directly by file_path — NOT via an IN over
+    h.existing_node_ids. A file with >999 indexed nodes (a big generated stub) would
+    otherwise bind one '?' per id and trip SQLite's variable limit ("too many SQL
+    variables"), crashing even the mandatory free estimate. This was the engine's last
+    unbatched IN; selecting by file_path needs zero binds and is what we actually want.
+    (P2 bug-hunt round 3, 2026-06-15.)"""
+    if not h.file_path:
         return []
-    placeholders = ",".join("?" * len(h.existing_node_ids))
     rows = index.db.execute(
-        f"SELECT title, body FROM nodes WHERE id IN ({placeholders}) AND kind='lesson'",
-        h.existing_node_ids,
+        "SELECT title, body FROM nodes WHERE file_path = ? AND kind='lesson'",
+        (h.file_path,),
     ).fetchall()
     return [{"title": r[0], "why": (r[1] or "").splitlines()[0] if r[1] else ""} for r in rows]
 
@@ -271,8 +295,16 @@ def run_power(
     run_error: BaseException | None = None
     try:
         for n, h in enumerate(hotspots, start=1):
-            system, user = _prompt_for_hotspot(index, repo, h, file_byte_cap)
-            resp = provider.complete(system, user, max_tokens=output_budget * 2)
+            # Reuse the EXACT prompt measured during estimation (estimate.prompts is in
+            # hotspot order) rather than re-reading the file — so the bytes sent match the
+            # bytes priced byte-for-byte, even if the file changed since the preview
+            # (TOCTOU, bug-hunt LOW 2026-06-17). Fall back to a fresh build only if the
+            # capture is somehow short (defensive; should never happen).
+            if n - 1 < len(estimate.prompts):
+                system, user = estimate.prompts[n - 1]
+            else:
+                system, user = _prompt_for_hotspot(index, repo, h, file_byte_cap)
+            resp = provider.complete(system, user, max_tokens=output_budget * OUTPUT_CAP_MULTIPLIER)
             report = parse_with_report(resp.text, index.rules)
             # surface schema mismatches loudly: a reply that yielded nothing for a REAL reason
             # (bad JSON / no recognized node key) is counted, never swallowed (the dogfood bug).

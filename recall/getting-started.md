@@ -81,10 +81,17 @@ Your AI now has native tools — it calls them on its own when it needs memory:
 | `recall` | where is X · why is it like this · what breaks if I change it |
 | `brief` | everything known about ONE file — *the call before every edit* |
 | `explain` | repo orientation for a fresh session |
+| `resolve` | correct a guessed symbol name into this repo's real one (before grep) |
 | `stamp` | write a decision/lesson into the memory |
 | `contested` | where the team burns time (churn × entanglement) |
 | `freshen` | re-check every note against the current git state |
+| `impact` | if I touch this, what's affected? (co-change + dependents) |
+| `precedent` | the most analogous past decisions, with how each turned out |
+| `callers` | who depends on this file/symbol (call-hierarchy) |
+| `dead_code` · `untested` · `cycles` | code nothing imports · code with no test edge · import cycles |
 | `dashboard` | start/find the local dashboard, returns the URL |
+
+All 14 are read-only and cost **0 model tokens**.
 
 And you get **slash commands** (MCP prompts — type `/` in Claude Code):
 
@@ -115,11 +122,17 @@ In the terminal:
 ```bash
 recall "why is there no default AI provider"     # ask anything — the 3 tracks answer
 recall brief recall/engine.py                    # BEFORE you edit a file
+recall resolve seatLimit                         # guessed name → this repo's real one
+recall impact recall/engine.py                   # if I touch this, what's affected?
+recall precedent "switching auth to JWT"         # how did the analogous past calls go?
 recall stamp "RLS: writers must set workspace_id" --body "insert path forgot the scope column" --anchors rls,workspace_id
 recall contested                                 # where time burns
 recall explain                                   # new here? start with this
 recall freshen                                   # re-check notes against git
 ```
+
+`callers`/`callees`, `dead-code`, `untested` and `cycles` round out the code-map
+side (see the [commands guide](https://whatever-recall.com/docs/commands)).
 
 In your AI chat: just work — the AI calls `brief` before edits and `recall` for questions on its own (the MCP server tells it to). Or use the slash commands above.
 

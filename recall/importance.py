@@ -38,7 +38,7 @@ _FEEDBACK_SATURATE = 5   # this many net-useful signals reaches the full +20%
 
 
 def compute_importance(db: sqlite3.Connection) -> dict[int, float]:
-    """Return {node_id: importance 0-10} for every code-symbol node.
+    """Return {node_id: importance 1-100} for every code-symbol node.
 
     Importance flows ALONG dependency edges toward what is depended-upon: if A depends
     on B, B accrues importance from A (B is load-bearing for A). We therefore run
@@ -95,11 +95,11 @@ def _to_scale(rank: dict[int, float]) -> dict[int, float]:
     span = hi - lo
     if span <= 1e-12:
         # No differentiation in the graph (no edges / fully symmetric). Everyone is a
-        # leaf: a low, honest constant rather than a misleading 10.
+        # leaf: a low, honest constant (1) rather than a misleading top score.
         return {i: 1.0 for i in rank}
     out: dict[int, float] = {}
     for i, v in rank.items():
-        # 1..10: floor at 1 so a connected-but-low node still reads as 'on the graph'.
+        # 1..100: floor at 1 so a connected-but-low node still reads as 'on the graph'.
         out[i] = round(1.0 + (v - lo) / span * (_MAX_SCORE - 1.0), 1)
     return out
 

@@ -152,6 +152,18 @@ def test_dashboard_html_carries_the_reconnect_recovery(served):
     assert "live--recon" in html
 
 
+def test_dashboard_html_carries_the_project_toggle(served):
+    """The project switcher must ship its Production⇄Test toggle (owner 2026-06-18:
+    'einfach in den modal ein schalter'). Pin the client-side seam so the toggle —
+    and the test list it reveals — can't silently regress out of the page."""
+    base, _ = served
+    _, html = _get(base, "/")
+    assert "setProjView(" in html          # the toggle handler
+    assert "PM_VIEW" in html               # the view state it drives
+    assert "recent_test" in html           # it reads the test list the API exposes
+    assert "pm-seg" in html                # the segment-control markup
+
+
 def test_page_serves_html(served):
     base, _ = served
     status, body = _get(base, "/")
@@ -492,14 +504,39 @@ def test_switch_is_refused_cross_origin(served, tmp_path):
 
 
 def test_recent_remembers_switched_projects(served, tmp_path):
+    """Switching to another project records it in the switcher.
+
+    Two-list model (owner 2026-06-18): the test repos here live under the OS temp
+    dir, so they route to the TEST list (`recent_test`), not production. The point
+    of this test is that switching is *remembered at all* — so we assert the repo
+    shows up across either list, exactly as the modal's toggle would surface it.
+    The production-vs-test ROUTING itself is pinned in test_recent_two_lists_*.
+    """
     base, repo = served
     other = tmp_path / "proj_b"
     other.mkdir()
     _post(base, "/api/switch", {"path": str(other)})
     _, body = _get(base, "/api/projects")
     d = json.loads(body)
-    names = {d["current"]["name"]} | {r["name"] for r in d["recent"]}
-    assert {repo.name, "proj_b"} <= names  # both the original and the switched repo
+    listed = (
+        {d["current"]["name"]}
+        | {r["name"] for r in d.get("recent", [])}
+        | {r["name"] for r in d.get("recent_test", [])}
+    )
+    assert {repo.name, "proj_b"} <= listed  # both the original and the switched repo
+
+
+def test_serve_projects_exposes_both_lists(served):
+    """/api/projects must always carry BOTH lists so the modal toggle has data.
+
+    The page's Production⇄Test switch reads `recent` and `recent_test`; if either
+    key vanished the toggle would silently show nothing. Pin the contract."""
+    base, _ = served
+    _, body = _get(base, "/api/projects")
+    d = json.loads(body)
+    assert "recent" in d and isinstance(d["recent"], list)
+    assert "recent_test" in d and isinstance(d["recent_test"], list)
+    assert "current" in d and d["current"]["name"]
 
 
 # ---------------------------------------------------- power estimate / index

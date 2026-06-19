@@ -44,6 +44,10 @@ class Rules:
     query_stopwords: frozenset[str] = field(default_factory=frozenset)
     # core veto — a hard minimum the project layer cannot weaken.
     core_silence_floor_min: int = 1
+    # Workstream B: print a model-free predicate SUGGESTION in the pre-commit check when a
+    # staged claim-bearing file has no re-check yet. Warn-only, never blocks. A project that
+    # finds the nudge noisy can silence it with `predicate_nudge: false` in rules.md.
+    predicate_nudge: bool = True
 
     def facet_weight(self, facet: str) -> float:
         return self.facet_weights.get(facet, 1.0)
@@ -84,7 +88,7 @@ class Rules:
                 # known. The recall read-path stays LLM-free (ADR-014).
                 "co_changed",
             },
-            surface_on={"edit", "task_start", "commit"},
+            surface_on={"edit", "task_start", "commit", "prompt", "session_start"},
         )
 
 
@@ -129,7 +133,17 @@ def _enforce_core(rules: Rules) -> Rules:
     weights = dict(rules.facet_weights)
     for facet, minimum in _CORE_FACET_FLOOR.items():
         weights[facet] = max(weights.get(facet, minimum), minimum)
-    return replace(rules, silence_floor=floor, facet_weights=weights)
+    # Force the core facet names back into the closed vocabulary (bug-hunt MEDIUM,
+    # 2026-06-17). The weight floor above is necessary but NOT sufficient: allowed_tags
+    # is REPLACE-if-present, so a project rules.md with e.g. `allowed_tags: [feature,
+    # bugfix]` (omitting "security") makes canonicalize_tags DROP the security tag at
+    # write time. An untagged node then falls back to the 1.0 default and the 2.0 floor
+    # never applies — the exact "hostile rules.md silences security" attack the floor was
+    # built to stop, achieved through a different knob. Re-adding the core facets here
+    # makes "security" (and any future core facet) un-droppable from the vocabulary,
+    # mirroring the additive-only treatment of stay_silent_on / query_stopwords.
+    allowed = set(rules.allowed_tags) | set(_CORE_FACET_FLOOR)
+    return replace(rules, silence_floor=floor, facet_weights=weights, allowed_tags=allowed)
 
 
 # ------------------------------------------------------------------- merging
@@ -141,6 +155,8 @@ def _merge(base: Rules, fm: dict) -> Rules:
         out.dedup_threshold = _bounded_float(fm["dedup_threshold"], lo=0.0, hi=1.0, name="dedup_threshold")
     if "context_multiplier" in fm:
         out.context_multiplier = _bounded_float(fm["context_multiplier"], lo=0.0, name="context_multiplier")
+    if "predicate_nudge" in fm:
+        out.predicate_nudge = _as_bool(fm["predicate_nudge"], name="predicate_nudge")
     if isinstance(fm.get("facet_weights"), dict):
         out.facet_weights = {
             **out.facet_weights,
@@ -171,6 +187,17 @@ def _merge(base: Rules, fm: dict) -> Rules:
             out.core_silence_floor_min, _bounded_int(fm["core"]["silence_floor_min"], lo=0, name="core.silence_floor_min")
         )
     return out
+
+
+def _as_bool(v, *, name: str) -> bool:
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes", "on"):
+        return True
+    if s in ("false", "0", "no", "off"):
+        return False
+    raise ValueError(f"rules.md: {name} must be a boolean, got {v!r}")
 
 
 def _bounded_int(v, *, lo: int, hi: int | None = None, name: str) -> int:

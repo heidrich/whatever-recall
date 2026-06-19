@@ -90,14 +90,14 @@ def parse_subtasks(body: str) -> list[dict[str, Any]]:
             text = re.sub(r"\*{1,2}|_{1,2}|`", "", " ".join(cur["_parts"])).strip()
             if text:
                 out.append({"text": text[:400], "done": cur["state"] == "done",
-                            "state": cur["state"]})
+                            "state": cur["state"], "line": cur["line"]})
 
-    for line in (body or "").splitlines():
+    for lineno, line in enumerate((body or "").splitlines(), start=1):
         m = _CHECK_RE.match(line)
         if m:
             _flush()
             cur = {"state": _CHECK_STATE[m.group(1).lower()],
-                   "_parts": [m.group(2).strip()]}
+                   "_parts": [m.group(2).strip()], "line": lineno}
         elif cur is not None and line[:1] in (" ", "\t") and line.strip():
             # an INDENTED non-empty line right after an item is a wrapped continuation of it;
             # fold it in so the item reads whole. A blank/column-0 line ends the item.

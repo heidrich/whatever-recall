@@ -48,8 +48,11 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import subprocess
+import tempfile
 import threading
+import urllib.error
 import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -65,6 +68,27 @@ _HTML = _HERE / "dashboard.html"
 _VENDOR = _HERE / "vendor"  # bundled static assets (highlight.js + theme), shipped offline
 _VENDOR_TYPES = {".js": "application/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8"}
+
+# W2 (audit 2026-06-14): value routes that expose repo data — gated per request so a
+# license that lapses mid-session stops serving (the launch-time CLI gate isn't enough
+# for a long-lived server). Login-view chrome (/api/license, /api/about, /api/legal,
+# /api/connection, /api/projects, /vendor, the shell) stays ungated so the page can
+# render its "sign in" state and the project switcher.
+_GATED_ROUTES = {
+    "/api/data", "/api/file", "/api/diff", "/api/recall", "/api/brief", "/api/activity",
+    "/api/contested", "/api/stale", "/api/commit", "/api/rules", "/api/onboarding",
+    "/api/power-estimate", "/api/power-status", "/api/pulse", "/api/hook", "/api/mcp",
+}
+
+
+def _dash_licensed() -> bool:
+    """Verified, in-window, non-pending license? Same source of truth as the CLI gate
+    and MCP. Never throws — a verify problem reads as signed-out."""
+    try:
+        from recall.login import is_licensed
+        return is_licensed()
+    except Exception:
+        return False
 
 # How much we surface to the page. Generous but bounded so a 7k-node repo stays snappy.
 _MAX_LESSONS = 200
@@ -143,6 +167,39 @@ def _file_authored(repo: Path) -> dict[str, dict]:
                 info[rel]["created_ts"] = cur_t
                 info[rel]["created_by"] = cur_a
     return info
+
+
+def _blame_task_steps(repo: Path, rel: str) -> list[dict]:
+    """Per-CHECKLIST-LINE author + time for a task file, from `git blame`.
+
+    Several people work one task; this answers "who did THIS step, and when" for each
+    `- [ ]/[x]/[-]/[>]` line — the last commit that touched that exact line (so for a
+    `- [x]` it's whoever ticked it). Model-free, straight from git. Returns a list in
+    file order: {by, ts, state, text} for each checklist line. [] if blame fails (e.g.
+    the file isn't committed yet — then there's no git author to show)."""
+    out = _git(repo, "blame", "--line-porcelain", "--", rel)
+    if not out:
+        return []
+    steps: list[dict] = []
+    by, ts = "", None
+    for line in out.splitlines():
+        if line.startswith("author "):
+            by = line[len("author "):].strip()
+        elif line.startswith("author-time "):
+            v = line[len("author-time "):].strip()
+            ts = int(v) if v.isdigit() else None
+        elif line.startswith("\t"):  # the actual source line (tab-prefixed in porcelain)
+            content = line[1:]
+            m = _CHECK_LINE_RE.match(content)
+            if m:
+                steps.append({"by": by, "ts": ts, "state": m.group(1).lower(),
+                              "text": m.group(2).strip()[:200]})
+            by, ts = "", None  # reset per source line
+    return steps
+
+
+# a checklist line in a task body: `- [ ]`/`- [x]`/`- [-]`/`- [>]` + the label
+_CHECK_LINE_RE = re.compile(r"^\s*[-*]\s*\[([ xX\->])\]\s*(.*)$")
 
 
 def git_snapshot(repo: Path) -> dict:
@@ -430,9 +487,9 @@ def build_snapshot(idx: Index, repo: Path) -> dict:
     # `author` (v3): WHO wrote it, from git — surfaced so the page can show + filter by
     # person. NULL-safe: an older index without the column still works (COALESCE → '').
     lessons = []
-    for nid, title, body, fp, sha, author, created, facets in db.execute(
-        "SELECT id,title,body,file_path,stamped_at_sha,author,created_at,facets FROM nodes "
-        "WHERE kind='lesson' ORDER BY id DESC LIMIT ?", (_MAX_LESSONS,)
+    for nid, title, body, fp, sha, author, created, facets, predicate, outcome in db.execute(
+        "SELECT id,title,body,file_path,stamped_at_sha,author,created_at,facets,predicate,outcome "
+        "FROM nodes WHERE kind='lesson' ORDER BY id DESC LIMIT ?", (_MAX_LESSONS,)
     ).fetchall():
         edges = [
             {"kind": ek, **node_brief(dst)}
@@ -448,6 +505,9 @@ def build_snapshot(idx: Index, repo: Path) -> dict:
         lessons.append({
             "id": nid, "title": title, "body": (body or "")[:2000],
             "why": (body or "").splitlines()[0] if body else "",
+            # arrow 1 + the causal chain end (v8/v9): surfaced so the story modal shows the
+            # predicate verdict and the OUTCOME as their own steps, never interpreted from body.
+            "predicate": predicate or None, "outcome": outcome or None,
             "file": rel, "sha": short,
             "author": author or None,
             "ts": ts,
@@ -523,7 +583,9 @@ def build_snapshot(idx: Index, repo: Path) -> dict:
         "WHERE file_path IS NOT NULL AND file_path!='' ORDER BY id"
     ).fetchall():
         lvl = drift(nid)
-        if lvl in ("committed", "uncommitted"):
+        # 🔴 broken (arrow 1): a claim whose own check now fails — surfaced in the drift
+        # list alongside SHA-drift so the dashboard ampel shows the new red too.
+        if lvl in ("committed", "uncommitted", "broken"):
             drifted.append({
                 "id": nid, "title": title, "file": fp.replace("\\", "/"),
                 "sha": (sha or "")[:7], "drift": lvl,
@@ -556,6 +618,25 @@ def build_snapshot(idx: Index, repo: Path) -> dict:
         # checklist items in the body become sub-tasks with progress (the roadmap shows a
         # real, checkable list — not a flat node). Pure text parse, stays model-free.
         subtasks = parse_subtasks(body or "")
+        # per-step author + time from git blame (who ticked THIS step, and when) — several
+        # people work one task, so each step carries its own "by/at". Matched by the step's
+        # text so it survives body-vs-file line drift. Best-effort: an uncommitted file or a
+        # blame miss just leaves the step without an author (no crash).
+        try:
+            blamed = _blame_task_steps(repo, rel)
+            # match on a normalized PREFIX, not exact text: parse_subtasks folds wrapped
+            # lines + strips markdown, while blame sees only the first source line — so
+            # compare the first ~40 chars with markdown/space normalized on both sides.
+            def _key(s: str) -> str:
+                return re.sub(r"[*_`\s]+", " ", (s or "")).strip().lower()[:40]
+            by_key = {_key(b["text"]): b for b in blamed}
+            for st in subtasks:
+                hit = by_key.get(_key(st.get("text") or ""))
+                if hit:
+                    st["by"] = hit.get("by") or None
+                    st["at"] = hit.get("ts")
+        except Exception:
+            pass  # step authorship is a nicety; never break the task list over it
         done_n = sum(1 for s in subtasks if s["done"])
         # dropped/moved steps are RESOLVED (a done task may carry them) — only an
         # `- [ ]` left under status:done is a real inconsistency the page must flag.
@@ -636,7 +717,53 @@ def _safe_path(repo: Path, rel: str) -> Path | None:
 # The dashboard runs against one repo at a time, but remembers the ones you've
 # opened so the header can offer a switcher. One small file, names + paths only.
 RECENT_PATH = Path.home() / ".recall" / "recent.json"
+RECENT_TEST_PATH = Path.home() / ".recall" / "recent_test.json"
 _MAX_RECENT = 12
+
+
+def _recent_path_for(repo: Path, *, base: Path | None = None) -> Path:
+    """Which switcher list a repo belongs in.
+
+    Owner 2026-06-18: two lists, routed automatically by the repo itself, so the
+    rule is the same for every AI / test / harness — no flag to remember to set.
+    An ephemeral repo (under the OS temp dir or a pytest sandbox) → the TEST list;
+    a real project → the PRODUCTION list. The dashboard's switcher modal has a
+    Production⇄Test toggle; production is what you normally see."""
+    prod = base if base is not None else RECENT_PATH
+    if _is_ephemeral_path(repo):
+        # mirror the prod path's parent/name so a monkeypatched test dir stays isolated
+        return prod.with_name(prod.stem + "_test" + prod.suffix)
+    return prod
+
+
+def _is_ephemeral_path(p: Path) -> bool:
+    """True if `p` lives under the system temp dir or a pytest sandbox.
+
+    Owner-found bug (2026-06-18): the project switcher filled up with `tmp…`
+    folders. Root cause — the test suite (and the proof/ harness) spawn REAL
+    dashboard subprocesses on throwaway repos; those run OUTSIDE the autouse
+    conftest fixture that redirects RECENT_PATH, so `serve()` happily wrote each
+    sandbox into the developer's real ~/.recall/recent.json. The conftest patch
+    fixes in-process tests; this guard fixes it STRUCTURALLY for everyone — a
+    temp/sandbox dir is never a project you deliberately opened, so it is never
+    remembered and never listed, no matter who starts the dashboard."""
+    try:
+        rp = p.resolve()
+    except OSError:
+        return False
+    parts_lower = {seg.lower() for seg in rp.parts}
+    # pytest's tmp dirs are always under a "pytest-of-<user>" / "pytest-<n>" root
+    if any(seg.startswith("pytest-") for seg in parts_lower):
+        return True
+    try:
+        tmp_root = Path(tempfile.gettempdir()).resolve()
+    except OSError:
+        return False
+    try:
+        rp.relative_to(tmp_root)
+        return True  # somewhere under the OS temp dir → ephemeral
+    except ValueError:
+        return False
 
 
 def _index_mtime(idx_path: Path) -> int | None:
@@ -655,7 +782,12 @@ def _load_recent(path: Path | None = None) -> list[dict]:
     entries whose directory is gone — deleted repos, vanished temp folders —
     are dropped on read, so the switcher only ever lists real, openable
     projects. The pruned list is NOT written back here (read paths stay
-    write-free); the next deliberate _remember_recent persists the cleanup.
+    write-free); the next _remember_recent persists the cleanup.
+
+    Two lists (owner 2026-06-18): pass the TEST path to read the test/sandbox list,
+    the default (RECENT_PATH) for the production list. Routing happens at WRITE
+    time (_recent_path_for), so each file already holds only its own kind — the
+    read just prunes vanished dirs.
     """
     path = path if path is not None else RECENT_PATH
     if not path.exists():
@@ -681,15 +813,22 @@ def _load_recent(path: Path | None = None) -> list[dict]:
 
 
 def _remember_recent(repo: Path, idx_path: Path, path: Path | None = None) -> None:
-    """Record (or bump to front) a project. Stores the repo path + its index path."""
-    path = path if path is not None else RECENT_PATH
+    """Record (or bump to front) a project, routed to the right list automatically.
+
+    Owner 2026-06-18: an ephemeral repo (OS temp dir / pytest sandbox) goes to the
+    TEST list, a real project to the PRODUCTION list — same rule for every AI, test
+    and harness, no flag to pass. `path` (default RECENT_PATH) is the PRODUCTION
+    base; the test list is derived from it (_recent_path_for), so a monkeypatched
+    test dir keeps both lists isolated."""
+    base = path if path is not None else RECENT_PATH
+    target = _recent_path_for(repo, base=base)
     rp = str(repo.resolve())
     entry = {"name": repo.resolve().name, "path": rp, "idx": str(idx_path)}
-    items = [r for r in _load_recent(path) if r.get("path") != rp]
+    items = [r for r in _load_recent(target) if r.get("path") != rp]
     items.insert(0, entry)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(items[:_MAX_RECENT], indent=2) + "\n", encoding="utf-8")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(items[:_MAX_RECENT], indent=2) + "\n", encoding="utf-8")
     except OSError:
         pass  # remembering is a nicety; never break the dashboard over it
 
@@ -1032,6 +1171,14 @@ def _make_handler(repo: Path, idx_path: Path):
                 return
             if path.startswith("/api/") and not self._host_ok():
                 return self._json(403, {"error": "bad Host header (DNS-rebinding guard)"})
+            # W2 (audit 2026-06-14): the dashboard is a long-lived server, so the
+            # one-time CLI launch gate isn't enough — a session must stop serving
+            # repo VALUE if the license lapses mid-run (trial ends / token swapped).
+            # Re-check per request, like the CLI + MCP do. The login-view chrome
+            # (shell, /vendor, /api/license, /api/about, /api/legal) stays ungated so
+            # the "sign in" page can still render.
+            if path in _GATED_ROUTES and not _dash_licensed():
+                return self._json(402, {"error": "not signed in", "signed_in": False})
             if path == "/api/data":
                 repo, idx_path = STATE["repo"], STATE["idx"]
                 if not idx_path.exists():
@@ -1080,11 +1227,17 @@ def _make_handler(repo: Path, idx_path: Path):
             if path == "/api/license":
                 self._serve_license()
                 return
+            if path == "/api/license-check":
+                self._serve_seat_check()
+                return
             if path == "/api/recall":
                 self._serve_recall()
                 return
             if path == "/api/brief":
                 self._serve_brief()
+                return
+            if path == "/api/activity":
+                self._serve_activity()
                 return
             if path == "/api/contested":
                 self._serve_contested()
@@ -1109,6 +1262,9 @@ def _make_handler(repo: Path, idx_path: Path):
                 return
             if path == "/api/about":
                 self._serve_about()
+                return
+            if path == "/api/build-settings":
+                self._serve_build_settings()
                 return
             if path == "/api/legal":
                 self._serve_legal()
@@ -1154,8 +1310,17 @@ def _make_handler(repo: Path, idx_path: Path):
             if path == "/api/license":
                 self._do_license()
                 return
+            if path == "/api/account-login":
+                self._do_account_login()
+                return
+            if path == "/api/account-login-poll":
+                self._do_account_login_poll()
+                return
             if path == "/api/shutdown":
                 self._do_shutdown()
+                return
+            if path == "/api/build-settings":
+                self._do_build_settings()
                 return
             self._send(404, b"not found", "text/plain")
 
@@ -1304,11 +1469,43 @@ def _make_handler(repo: Path, idx_path: Path):
 
         def _serve_license(self):
             """The stored account license, decoded for display (ADR-030). The raw
-            token never goes to the page — only the payload + computed state."""
+            token never goes to the page — only the payload + computed state.
+
+            W2: signed_in means ACTUALLY usable — a verified, in-window, non-pending
+            token. A forged/expired/pending token reads as signed-out so the page
+            shows the login view (D7), not a logged-in dashboard."""
             from recall.license import load_license
 
             lic = load_license()
-            self._json(200, {"signed_in": lic is not None, "license": lic})
+            usable = bool(lic) and lic.get("verified") and not lic.get("expired") and not lic.get("pending")
+            self._json(200, {"signed_in": usable, "license": lic})
+
+        def _serve_seat_check(self):
+            """Single-device seat check for the dashboard's 60-min heartbeat (0013),
+            ONLINE-REQUIRED but DEVELOPER-FRIENDLY (owner 2026-06-16). Reuses the CLI's
+            throttled seat_check_if_due():
+              - reason 'ok'      → active:true  (confirmed, or not yet due) — work
+              - reason 'grace'   → active:true  but `grace_left` seconds remain: the page
+                                   shows a header warning + countdown + Reconnect button
+              - reason 'kicked'  → active:false — taken by another device, sign out now
+              - reason 'expired' → active:false — grace ran out with no reconnect, sign out
+            The one exception is OUR own internal error → active:true (don't lock out on a
+            bug). Loopback only."""
+            if not self._is_local():
+                return self._json(403, {"error": "seat check is local-machine only"})
+            grace_left = None
+            try:
+                from recall.login import seat_check_if_due, seat_grace_seconds_left, SEAT_OK, SEAT_GRACE
+                result = seat_check_if_due()
+                if result in (SEAT_OK, SEAT_GRACE):
+                    grace_left = seat_grace_seconds_left()  # None unless a grace is running
+            except Exception:
+                result, SEAT_OK, SEAT_GRACE = "ok", "ok", "grace"  # fail open on OUR bug
+            self._json(200, {
+                "active": result in (SEAT_OK, SEAT_GRACE),  # keep working during grace
+                "reason": result,
+                "grace_left": grace_left,
+            })
 
         def _do_license(self):
             """Save / clear the account license token — the Account tab's only write.
@@ -1317,7 +1514,7 @@ def _make_handler(repo: Path, idx_path: Path):
             a rebound page can't plant or wipe a license. Uses the SAME file
             (`~/.recall/license.token`) that `recall login` will write later, so
             the dashboard and the CLI gate stay byte-for-byte compatible."""
-            from recall.license import clear_license, save_license
+            from recall.license import LicenseError, clear_license, save_license
 
             if not self._is_local():
                 return self._json(403, {"error": "license is local-machine only"})
@@ -1333,12 +1530,106 @@ def _make_handler(repo: Path, idx_path: Path):
 
             token = str(body.get("token") or "")
             try:
-                payload = save_license(token)
+                payload = save_license(token)  # W2: now verifies the Ed25519 signature
             except ValueError as e:
                 return self._json(400, {"error": str(e)})
+            except LicenseError as e:  # couldn't reach the API to verify, nothing cached
+                return self._json(503, {"error": str(e)})
             except OSError as e:
                 return self._json(500, {"error": f"could not save: {e}"})
             self._json(200, {"signed_in": True, "license": payload})
+
+        def _do_account_login(self):
+            """Start the browser login (RFC-8628 device flow). ONE button: we ask the
+            web API for a device_code + a prefilled activation URL; the page opens that
+            URL so the user signs in HIS way — e-mail/password OR Google/GitHub/Discord,
+            every provider works because the real login happens on whatever-recall.com
+            (owner 2026-06-14: "was ist mit den google und git usern"). The page then
+            polls /api/account-login-poll until the user approves.
+
+            Hardened like _do_license: loopback + same-origin only. We never see the
+            user's credentials — only the device_code (a polling secret) passes through
+            here, and only the resulting signed token is stored locally."""
+            import json as _json_mod
+            from recall.license import API_BASE, device_id
+
+            if not self._is_local():
+                return self._json(403, {"error": "Login ist nur auf dieser Maschine möglich"})
+            if not self._same_origin():
+                return self._json(403, {"error": "cross-origin login refused"})
+
+            # send this machine's anonymous device id so logging in here ALSO takes the
+            # single-device seat (0013) — same as the CLI `recall login` path.
+            start_body = _json_mod.dumps({"device_id": device_id()}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{API_BASE}/api/device/start", method="POST", data=start_body,
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=12) as r:  # noqa: S310 (https web API)
+                    resp = _json_mod.loads(r.read().decode("utf-8"))
+            except (urllib.error.URLError, TimeoutError, OSError):
+                return self._json(503, {"error": "whatever-recall.com nicht erreichbar — Internet prüfen"})
+            except ValueError:
+                return self._json(502, {"error": "unerwartete Antwort vom Server"})
+            # pass the device_code + browser URL to the page (the device_code is the
+            # CLI's polling bearer; the page keeps it only to poll us back)
+            self._json(200, {
+                "device_code": resp.get("device_code"),
+                "user_code": resp.get("user_code"),
+                "verification_uri_complete": resp.get("verification_uri_complete"),
+                "interval": resp.get("interval", 5),
+                "expires_in": resp.get("expires_in", 600),
+            })
+
+        def _do_account_login_poll(self):
+            """Poll the device flow with the device_code; when the user has approved in
+            the browser, the web API hands back the signed token EXACTLY once — we save
+            it via save_license (same verify+persist path as a manual paste) and report
+            signed_in. Loopback + same-origin only."""
+            import json as _json_mod
+            from recall.license import API_BASE, LicenseError, save_license
+
+            if not self._is_local():
+                return self._json(403, {"error": "login is local-machine only"})
+            if not self._same_origin():
+                return self._json(403, {"error": "cross-origin login refused"})
+            body = self._read_json_body()
+            if body is None:
+                return self._json(400, {"error": "invalid request body"})
+            device_code = str(body.get("device_code") or "")
+            if not device_code:
+                return self._json(400, {"error": "device_code required"})
+
+            data = _json_mod.dumps({"device_code": device_code}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{API_BASE}/api/device/poll", method="POST", data=data,
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=12) as r:  # noqa: S310 (https web API)
+                    resp = _json_mod.loads(r.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    return self._json(200, {"status": "pending"})  # slow_down → keep waiting
+                return self._json(502, {"status": "error"})
+            except (urllib.error.URLError, TimeoutError, OSError):
+                return self._json(200, {"status": "pending"})  # transient — let the page retry
+            except ValueError:
+                return self._json(502, {"status": "error"})
+
+            status = str(resp.get("status") or "")
+            if status != "ok":
+                # pending | denied | expired | slow_down — pass through for the page
+                return self._json(200, {"status": status or "pending"})
+            token = str(resp.get("token") or "")
+            if not token:
+                return self._json(502, {"status": "error"})
+            try:
+                payload = save_license(token)  # verify signature + persist
+            except (ValueError, LicenseError, OSError):
+                return self._json(502, {"status": "error"})
+            self._json(200, {"status": "ok", "signed_in": True, "license": payload})
 
         def _do_connect(self):
             """Write / clear the AI connection — the connect-modal's only write.
@@ -1387,21 +1678,33 @@ def _make_handler(repo: Path, idx_path: Path):
             })
 
         def _serve_projects(self):
-            """The current project + the recent list, for the header switcher."""
+            """The current project + BOTH recent lists, for the header switcher.
+
+            `recent` = real projects (production). `recent_test` = temp/pytest
+            sandboxes (every AI/test/harness lands here automatically). The modal's
+            Production⇄Test toggle picks which to show; production is the default."""
             repo, idx_path = STATE["repo"], STATE["idx"]
-            recent = []
-            for r in _load_recent():
-                p = Path(r["path"])
-                recent.append({
-                    "name": r["name"] or p.name, "path": r["path"],
-                    "current": p.resolve() == repo.resolve(),
-                    "indexed": (p / ".mind" / "index.db").exists(),
-                })
+
+            def _decorate(rows):
+                out = []
+                for r in rows:
+                    p = Path(r["path"])
+                    out.append({
+                        "name": r["name"] or p.name, "path": r["path"],
+                        "current": p.resolve() == repo.resolve(),
+                        "indexed": (p / ".mind" / "index.db").exists(),
+                    })
+                return out
+
+            recent = _decorate(_load_recent())  # RECENT_PATH = production
+            recent_test = _decorate(_load_recent(_recent_path_for(
+                Path(tempfile.gettempdir()), base=RECENT_PATH)))  # the derived test list
             self._json(200, {
                 "current": {"name": repo.name, "path": str(repo),
                             "indexed": idx_path.exists(),
                             "indexed_at": _index_mtime(idx_path)},
                 "recent": recent,
+                "recent_test": recent_test,
             })
 
         def _do_switch(self):
@@ -1424,7 +1727,7 @@ def _make_handler(repo: Path, idx_path: Path):
                 return self._json(400, {"error": "not a directory on this machine"})
             new_repo, new_idx = resolved
             STATE["repo"], STATE["idx"], STATE["base"] = new_repo, new_idx, new_repo.resolve()
-            _remember_recent(new_repo, new_idx)
+            _remember_recent(new_repo, new_idx)  # auto-routed to prod/test by the repo path
             self._json(200, {
                 "switched": True,
                 "current": {"name": new_repo.name, "path": str(new_repo),
@@ -1564,12 +1867,61 @@ def _make_handler(repo: Path, idx_path: Path):
                 return self._json(400, {"error": "empty file"})
             idx = Index.open(idx_path, repo=repo)
             try:
-                b = idx.brief(rel)
+                # rich=True: the dashboard story chain shows the reicher causal layers
+                # (impact + precedent), which the lean CLI/MCP brief omits. Still 0 tokens.
+                b = idx.brief(rel, rich=True, consumer="dashboard")
             except Exception as e:
                 return self._json(500, {"error": str(e)})
             finally:
                 idx.db.close()
             self._json(200, b)
+
+        def _serve_activity(self):
+            """The live activity console feed (v7): recent read-path calls — recall / brief /
+            explain / stamp — from the shared access_log, so the user SEES recall being used,
+            across CLI + MCP + dashboard (all three processes write this one DB). Polled, not
+            pushed: it shows COMMITTED rows with up-to-poll latency, never a call mid-flight
+            (the three are separate processes sharing only .mind/index.db). `since` is a unix
+            ts (rows strictly newer); `limit` caps the batch. Read-only, 0 model tokens."""
+            repo, idx_path = STATE["repo"], STATE["idx"]
+            # `now` is read from SQLite's clock (the SAME strftime('%s') the rows are stamped
+            # with) so the client's `since` cursor never drifts from the server clock.
+            if not idx_path.exists():
+                return self._json(200, {"no_index": True, "rows": [], "now": 0})
+            qs = parse_qs(urlparse(self.path).query)
+            try:
+                since = int((qs.get("since") or ["0"])[0])
+            except ValueError:
+                since = 0
+            try:
+                limit = max(1, min(500, int((qs.get("limit") or ["200"])[0])))
+            except ValueError:
+                limit = 200
+            idx = Index.open(idx_path, repo=repo)
+            try:
+                # LEFT JOIN nodes so a stamp/recall row that logged a node_id can show WHICH
+                # file it touched (the file lives on nodes, we already store node_id). brief
+                # rows already carry the file in `query`. No schema change needed.
+                rows = idx.db.execute(
+                    "SELECT a.ts, a.kind, a.query, a.consumer, a.surfaced, a.latency_us, "
+                    "       REPLACE(COALESCE(n.file_path,''),'\\','/') AS file "
+                    "FROM access_log a LEFT JOIN nodes n ON n.id = a.node_id "
+                    "WHERE a.ts > ? ORDER BY a.ts DESC, a.rowid DESC LIMIT ?",
+                    (since, limit),
+                ).fetchall()
+                now = idx.db.execute("SELECT strftime('%s','now')").fetchone()[0]
+            except Exception as e:
+                return self._json(500, {"error": str(e)})
+            finally:
+                idx.db.close()
+            # newest-first for the feed; the client prepends, so the console reads top-down.
+            out = [
+                {"ts": r["ts"], "kind": r["kind"] or "recall", "query": r["query"],
+                 "consumer": r["consumer"] or "cli", "surfaced": r["surfaced"],
+                 "latency_us": r["latency_us"], "file": r["file"] or ""}
+                for r in rows
+            ]
+            self._json(200, {"rows": out, "now": int(now)})
 
         def _serve_contested(self):
             """Wave B — uncertainty hotspots: the files the team kept changing (high churn
@@ -1613,7 +1965,7 @@ def _make_handler(repo: Path, idx_path: Path):
                 return self._json(200, {"no_index": True})
             idx = Index.open(idx_path, repo=repo)
             try:
-                o = idx.onboarding()
+                o = idx.onboarding(consumer="dashboard")
             except Exception as e:
                 return self._json(500, {"error": str(e)})
             finally:
@@ -1756,14 +2108,88 @@ def _make_handler(repo: Path, idx_path: Path):
                                "info & payment mail comes from @mccain-digital.com",
                 "support_email": "support@mccain-digital.com",
                 "payment_email": "payment@mccain-digital.com",
-                # community links for the About tab (owner 2026-06-13: "hinter
-                # about noch das discord und github icon mit den links dazu").
-                # The community Discord — a permanent, non-expiring invite (owner
-                # 2026-06-13). An env override lets a fork point elsewhere; the
-                # default is the real recall community so the icon ships live.
+                # community links for the About tab (owner 2026-06-13). The community
+                # Discord link is REMOVED for now (owner 2026-06-16: "nimm die discord
+                # community links erstmal raus" — Discord *login* stays, the community
+                # link goes). The About/header icon renders only when discord_url is
+                # truthy, so an empty default simply hides it; an env override can
+                # re-enable a community invite later without a code change.
                 "github_url": "https://github.com/heidrich/whatever-recall",
-                "discord_url": os.environ.get("RECALL_DISCORD_INVITE") or "https://discord.gg/bMYYHByFW6",
+                "discord_url": os.environ.get("RECALL_DISCORD_INVITE", ""),
+                # "Built with" credits — same list/order as the website footer
+                # (web/src/lib/links.ts BUILT_WITH). For now ALL plain official
+                # links — no affiliate links yet. `affiliate` drives rel=sponsored
+                # and is False everywhere; flip Vercel/Supabase/Claude Code to True
+                # (and swap their url) when the real referral links land.
+                "built_with": [
+                    {"name": "Vercel", "url": "https://vercel.com/", "affiliate": False},
+                    {"name": "Supabase", "url": "https://supabase.com/", "affiliate": False},
+                    {"name": "Claude Code", "url": "https://claude.com/claude-code", "affiliate": False},
+                    {"name": "Next.js", "url": "https://nextjs.org/", "affiliate": False},
+                    {"name": "React", "url": "https://react.dev/", "affiliate": False},
+                    # TypeScript before Python — the web/dashboard is written in TS
+                    {"name": "TypeScript", "url": "https://www.typescriptlang.org/", "affiliate": False},
+                    # Python after TypeScript — the language the recall engine is built in
+                    {"name": "Python", "url": "https://www.python.org/", "affiliate": False},
+                    # Stripe after Python — payments
+                    {"name": "Stripe", "url": "https://stripe.com/", "affiliate": False},
+                    # Resend after Stripe — transactional email (owner: full transparency)
+                    {"name": "Resend", "url": "https://resend.com/", "affiliate": False},
+                ],
             })
+
+        def _serve_build_settings(self):
+            """The current build & share settings (config.toml [share]) for the Build
+            Settings modal. Read-only GET — the values + a little context the modal needs.
+            Never exposes a secret; these are project build rules, not credentials."""
+            from recall.config import load_build_config
+            cfg = load_build_config(STATE["repo"])
+            d = cfg.to_public_dict()
+            # count private nodes so the modal can show "N notes stay local"
+            priv = 0
+            try:
+                idx = Index.open(STATE["idx"], repo=STATE["repo"])
+                try:
+                    priv = idx.db.execute(
+                        "SELECT COUNT(*) FROM nodes WHERE visibility='private'"
+                    ).fetchone()[0]
+                finally:
+                    idx.db.close()
+            except Exception:
+                priv = 0
+            self._json(200, {"settings": d, "private_count": priv})
+
+        def _do_build_settings(self):
+            """Save the build & share settings (config.toml [share]) — the modal's writer.
+            Local + same-origin only (it writes a file on disk). Unknown keys ignored;
+            values are clamped by config._coerce on the next read (fail-closed)."""
+            from recall.config import load_build_config, write_build_config, BuildConfig
+            if not self._is_local():
+                return self._json(403, {"error": "build settings are local-machine only"})
+            if not self._same_origin():
+                return self._json(403, {"error": "cross-origin settings change refused"})
+            body = self._read_json_body() or {}
+            cur = load_build_config(STATE["repo"])
+            # merge: only fields present in the body override the current value
+            vis = str(body.get("default_visibility", cur.default_visibility)).strip().lower()
+            if vis not in ("team", "private"):
+                vis = cur.default_visibility
+            block = body.get("block_raw_mind_commit", cur.block_raw_mind_commit)
+            dry = body.get("dry_run_before_export", cur.dry_run_before_export)
+            path = str(body.get("export_path", cur.export_path)).strip() or cur.export_path
+            exc = body.get("export_exclude", list(cur.export_exclude))
+            exc = tuple(str(x).strip() for x in exc if str(x).strip()) if isinstance(exc, list) else cur.export_exclude
+            new = BuildConfig(
+                default_visibility=vis,
+                block_raw_mind_commit=bool(block),
+                dry_run_before_export=bool(dry),
+                export_path=path,
+                export_exclude=exc,
+            )
+            write_build_config(STATE["repo"], new)
+            # read back through the loader so the modal sees the same clamped truth
+            saved = load_build_config(STATE["repo"]).to_public_dict()
+            self._json(200, {"ok": True, "settings": saved})
 
         def _serve_legal(self):
             """Serve the PRODUCT's legal texts verbatim (?doc=license|commercial) —
@@ -1972,14 +2398,21 @@ def is_dashboard_live(repo: Path) -> dict | None:
     stale newest lock can't hide a live older server. This is what 'already running?'
     checks must call so a stale lock can't make us open a dead URL or refuse to start."""
     for info in read_locks(repo):
+        host = _loopback_host(info["host"])
+        url = f"http://{host}:{info['port']}/api/pulse"
         try:
-            host = _loopback_host(info["host"])
-            url = f"http://{host}:{info['port']}/api/pulse"
             with urllib.request.urlopen(url, timeout=2) as r:  # noqa: S310 (loopback only)
                 r.read(1)
             return {"host": info["host"], "port": info["port"], "pid": info["pid"]}
+        except urllib.error.HTTPError:
+            # ANY HTTP response means a server is answering on that port — even a 402
+            # "sign in" gate (W2 put /api/pulse in _GATED_ROUTES). A signed-out but LIVE
+            # dashboard returns 402; treating that as "dead" deleted its lock (orphan:
+            # `recall stop` couldn't find it; dashboard/tray double-bound the port). So a
+            # gated response is still ALIVE. (P1 bug-hunt 2026-06-15.)
+            return {"host": info["host"], "port": info["port"], "pid": info["pid"]}
         except Exception:
-            _clear_lock(info["_path"])  # this lock lied — tidy up so the state is honest
+            _clear_lock(info["_path"])  # only a connection failure means the lock lied
     return None
 
 

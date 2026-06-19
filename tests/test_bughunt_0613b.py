@@ -497,6 +497,11 @@ def test_load_license_does_not_crash_on_non_numeric_exp(tmp_path, monkeypatch):
 
     import recall.license as lic
 
+    # this test exercises the FILE path explicitly; clear the conftest's env token
+    # (W2) so load_license reads the bad token we plant, not the valid env one.
+    monkeypatch.delenv("RECALL_LICENSE", raising=False)
+    monkeypatch.delenv("RECALL_PUBKEY", raising=False)
+
     payload = {"sub": "u", "email": "e@x.com", "plan": "solo", "exp": "soon"}
     blob = _b64.urlsafe_b64encode(_json.dumps(payload).encode()).decode().rstrip("=")
     token = f"{blob}.sig"
@@ -504,7 +509,7 @@ def test_load_license_does_not_crash_on_non_numeric_exp(tmp_path, monkeypatch):
     tok_path.write_text(token, encoding="utf-8")
     monkeypatch.setattr(lic, "LICENSE_PATH", tok_path)
 
-    assert lic.load_license() is None  # must not raise
+    assert lic.load_license() is None  # must not raise (bad exp / unverified → signed out)
 
 
 def test_decode_token_accepts_numeric_string_exp():

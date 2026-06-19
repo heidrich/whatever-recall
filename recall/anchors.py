@@ -12,6 +12,10 @@ from __future__ import annotations
 
 import re
 
+# Longest separator-free [a-z0-9] run — used to skip ReDoS blobs without dropping real
+# (separator-rich) deep paths. See extract_anchors. (bug-hunt round 2, 2026-06-15.)
+_RUN = re.compile(r"[a-z0-9]+")
+
 # Stopwords (DE + EN) + git/process noise that would otherwise become false anchors.
 STOP: set[str] = set(
     """
@@ -32,16 +36,30 @@ def extract_anchors(text: str) -> set[str]:
     """
     text = text.lower()
     toks: set[str] = set()
-    # technical symbols: foo_bar, foo-bar, foo.bar, .ed-root, --ed-token, wf_abc, z-260
-    for m in re.findall(r"[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+", text):
-        toks.add(m)
-    # domain IDs: adr-50, #38, alpha.219, migration #34, phase 2
+    # The technical-symbol regex `[a-z0-9]*(?:[-_.][a-z0-9]+)+` backtracks QUADRATICALLY
+    # ONLY on a long SEPARATOR-FREE [a-z0-9] run (measured: pure 8k run ≈ 0.8 s; the same
+    # 8k length broken by '.'/'-'/'_'/'/' every few chars is <1 ms — separators reset the
+    # backtracking). So we skip a whitespace-token only when its longest separator-free RUN
+    # exceeds the cap, NOT on whole-token length: a deep separator-rich path like
+    # `src/main/java/com/example/billing/service/SubscriptionLifecycleManager.java` (75
+    # chars) is safe and MUST keep yielding its directory anchors. (Round-1 bounded the
+    # whole token and silently dropped deep-path anchors — P2 regression, round 2.)
+    _MAXTOK = 64
+    for piece in text.split():
+        if any(len(run) > _MAXTOK for run in _RUN.findall(piece)):
+            continue  # an opaque blob (token/hash/base64), never a load-bearing anchor
+        # technical symbols: foo_bar, foo-bar, foo.bar, .ed-root, --ed-token, wf_abc, z-260
+        for m in re.findall(r"[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+", piece):
+            toks.add(m)
+        # plain words >= 4 chars
+        for m in re.findall(r"[a-z][a-z0-9]{3,}", piece):
+            if m not in STOP:
+                toks.add(m)
+    # domain IDs: adr-50, #38, alpha.219, migration #34, phase 2 — these span whitespace
+    # ("migration #34") so they run over the full text; the pattern is linear (no nested
+    # quantifier over an open class), so it is not a backtracking risk.
     for m in re.findall(r"(?:adr|alpha|migration|chunk|phase|wave)[-\s#]*\d+", text):
         toks.add(m.replace(" ", "").replace("#", ""))
-    # plain words >= 4 chars
-    for m in re.findall(r"[a-z][a-z0-9]{3,}", text):
-        if m not in STOP:
-            toks.add(m)
     return toks
 
 

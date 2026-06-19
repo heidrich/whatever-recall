@@ -13,17 +13,21 @@ license is honest about who pays:
 - **Competing with recall is not licensed.** You may not use the Licensed Work
   to offer a product or service that competes with it — at any tier, ever.
 
-## The plans (subscription = your commercial license)
+## The price (subscription = your commercial license)
 
-| Plan | Seats | Price |
-|------|-------|-------|
-| **Solo** | 1 developer | $10/mo · $100/yr |
-| **Team** | up to 10 | $100/mo · $800/yr |
-| **Studio** | up to 25 (+ priority support) | $250/mo · $2,000/yr |
+One product, priced **only by seats** — one seat per person using recall:
 
-Every plan has every feature — tiers differ only in seats. More than 25 seats,
-embedding recall in a product you ship, or other special arrangements:
-talk to us.
+|              | Monthly             | Yearly              |
+|--------------|---------------------|---------------------|
+| **Per seat** | $29 / seat · month  | $290 / seat · year  |
+
+- **Minimum 1 seat**, add seats freely as your team grows.
+- **Every seat has every feature** — there are no locked tiers. The shared team
+  tools (a memory many people read and write) simply light up at **2+ seats**.
+- 14-day full-feature trial, no card.
+
+Embedding recall in a product you ship, very large rollouts, or other special
+arrangements: talk to us.
 
 ## Education & research — free, forever
 

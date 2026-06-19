@@ -1,6 +1,6 @@
 [project]
 name = "whatever-recall"
-version = "0.1.0"
+version = "1.0.0"
 description = "AI-native project memory. Write-time stamping, token-free recall. The code is the wiki."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -8,10 +8,13 @@ license = { text = "BUSL-1.1" }
 authors = [{ name = "Kathrin & Christian Mc Cain — McCain Digital", email = "info@mccain-digital.com" }]
 keywords = ["ai", "memory", "code-search", "developer-tools", "rag"]
 
-# The engine core (db, anchors, engine, rules, CLI) is pure stdlib — sqlite3 with
-# FTS5 ships with CPython. No runtime deps required to recall. tree-sitter (code map)
-# and the HTTP bridge are optional extras so the base install stays zero-dependency.
-dependencies = []
+# The engine core (db, anchors, engine, rules) is pure stdlib — sqlite3 with FTS5
+# ships with CPython. tree-sitter (code map) and the HTTP bridge stay optional.
+# PyNaCl is the ONE required runtime dep (W2, 2026-06-14): every gated command
+# verifies its Ed25519 license signature offline, so the verifier must always be
+# present — it can't be an optional extra. PyNaCl ships prebuilt C wheels, so no
+# compiler is needed on the user's machine. The read path stays LLM-free (ADR-012).
+dependencies = ["PyNaCl>=1.5"]
 
 [project.optional-dependencies]
 # Code map for bootstrap (S1.3-A). Without it, bootstrap falls back to git-path anchors.
@@ -45,6 +48,10 @@ Repository = "https://github.com/heidrich/whatever-recall"
 # themselves are green. Disabling capture (-s) sidesteps the broken teardown path.
 # Remove once pytest ships the 3.14 capture fix (this is a workaround, not a pref).
 addopts = "-s"
+# Only the real suite. proof/ holds benchmark SANDBOXES (e.g. proof/big-proof/oracle/*)
+# that import their own `src/` on a sandbox-local path — collecting them here is a false
+# ImportError, not a recall test. The benchmark harness runs those in isolation (score.py).
+testpaths = ["tests"]
 
 [build-system]
 requires = ["setuptools>=68"]

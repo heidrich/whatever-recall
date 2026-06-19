@@ -103,7 +103,10 @@ def test_estimate_spends_zero_completion_calls(tmp_path):
     assert echo.complete_calls == []  # NOT ONE completion was made
     assert est.hotspots == 2
     assert est.input_tokens > 0
-    assert est.est_output_tokens == 2 * 400  # output_budget per hotspot
+    # bug-hunt MEDIUM (2026-06-17): the preview prices the REAL ceiling the run uses
+    # (max_tokens = output_budget × OUTPUT_CAP_MULTIPLIER), not just the expected budget,
+    # so --yes approves a true upper bound. 2 hotspots × 400 budget × 2 cap = 1600.
+    assert est.est_output_tokens == 2 * 400 * 2
     assert est.est_cost_usd == 0.0  # echo is free (like ollama)
     assert len(est.per_file) == 2
 

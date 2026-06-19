@@ -24,12 +24,19 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from recall.predicate import evaluate_predicate, merge_signal
+
 # Drift levels, ordered worst-last so max() picks the loudest signal for a node.
 FRESH = "fresh"            # 🟢 no change since the stamp
 COMMITTED = "committed"    # 🟡 new commits touched the file after the stamp
 UNCOMMITTED = "uncommitted"  # 🟠 open edits in the working tree
+BROKEN = "broken"          # 🔴 a predicate failed — the CLAIM is wrong NOW (arrow 1, v8)
 
-_LEVEL_RANK = {FRESH: 0, COMMITTED: 1, UNCOMMITTED: 2}
+# BROKEN ranks above every drift level: it speaks to TRUTH (the claim no longer holds),
+# not movement (the file changed). A failed re-check is the loudest possible staleness
+# signal — it's the case SHA-drift is structurally blind to (a wrong-from-start "why" on
+# an unmoved file stays 🟢 forever without it). See recall/predicate.py + merge_signal().
+_LEVEL_RANK = {FRESH: 0, COMMITTED: 1, UNCOMMITTED: 2, BROKEN: 3}
 
 # Only CLAIM-BEARING knowledge can drift (Owner crux, 2026-06-09). A drift light is a
 # promise that "this STATEMENT may no longer match the code" — so it only makes sense for
@@ -171,6 +178,11 @@ class RepoState:
         """Same classification as file_drift(), answered from the cached reads."""
         if not rel:
             return FRESH
+        # git-derived keys (_dirty from `git status`, _touch from history) are ALWAYS
+        # forward-slash. A node whose file_path was stored with backslashes (a Windows
+        # `recall stamp --anchors pkg\x.py`) would never match -> its drift was invisible.
+        # Normalize to '/' at the comparison boundary. (P2 bug-hunt 2026-06-15.)
+        rel = rel.replace("\\", "/")
         if not (self.repo / rel).exists():
             return COMMITTED  # deleted-in-a-commit, not a live edit (see file_drift)
         if rel in self._dirty:
@@ -197,6 +209,7 @@ class RepoState:
         unknown/None stamp SHA returns 0 (can't prove drift, never a false alarm)."""
         if not stamped_sha:
             return 0
+        rel = rel.replace("\\", "/")  # match git's forward-slash keys (see drift_of)
         stamp_rank = self._order.get(stamped_sha)
         if stamp_rank is None and len(stamped_sha) >= 7:
             stamp_rank = self._order.get(stamped_sha[:7])
@@ -209,6 +222,35 @@ class RepoState:
 def _looks_like_full_sha(line: str) -> bool:
     t = line.strip()
     return len(t) == 40 and all(c in "0123456789abcdef" for c in t.lower())
+
+
+def _symbol_span_ends(index) -> dict[tuple[str, int], int]:
+    """Map (file_path, symbol_start_line) -> the line the symbol's span ENDS at, so a
+    predicate on a claim pinned to that symbol checks only the symbol's body.
+
+    recall stores each code-symbol's START line but not its end. The next code-symbol's
+    start in the same file is the natural boundary: a symbol's body runs from its line up
+    to (but not including) the next symbol's line. We return next_start - 1 (inclusive end
+    for predicate.py's 1-based, inclusive line_range). The last symbol in a file has no next
+    symbol, so it gets no entry — the caller then checks the whole file from its start, which
+    is the honest fallback (we can't know where the last symbol ends without reading the file,
+    and predicate.py's _slice_lines clamps a too-large end safely anyway).
+
+    file_path is normalised to forward-slash so a Windows-stored '\\' path matches the
+    forward-slash rel the freshen loop iterates."""
+    rows = index.db.execute(
+        "SELECT REPLACE(file_path,'\\','/'), line FROM nodes "
+        "WHERE kind='code-symbol' AND file_path IS NOT NULL AND line IS NOT NULL "
+        "ORDER BY REPLACE(file_path,'\\','/'), line"
+    ).fetchall()
+    ends: dict[tuple[str, int], int] = {}
+    for i, (rel, line) in enumerate(rows):
+        nxt = rows[i + 1] if i + 1 < len(rows) else None
+        # only the SAME file's next symbol bounds this one; a different file means
+        # this symbol is the file's last -> no end (whole-file fallback, no entry).
+        if nxt and nxt[0] == rel and nxt[1] > line:
+            ends[(rel, line)] = nxt[1] - 1
+    return ends
 
 
 def freshen(index, repo: str | Path) -> dict[str, Any]:
@@ -228,9 +270,18 @@ def freshen(index, repo: str | Path) -> dict[str, Any]:
     # auto-regenerated code map and immutable commit facts are forced FRESH (see
     # CLAIM_BEARING_KINDS) so the light measures real staleness, not commit noise.
     rows = index.db.execute(
-        "SELECT id, file_path, stamped_at_sha, kind FROM nodes "
+        "SELECT id, file_path, stamped_at_sha, kind, predicate, line FROM nodes "
         "WHERE file_path IS NOT NULL AND file_path != ''"
     ).fetchall()
+
+    # Predicate scoping (arrow 1, v8): a claim pinned to a symbol's `line` is re-checked
+    # only against THAT symbol's span, not the whole file — a `contains:` pattern living in
+    # an unrelated function must not false-confirm the claim. recall stores a symbol's start
+    # line but not its end, so we derive the end as the next code-symbol's start in the same
+    # file (the real boundary from the code map). Built once for the whole pass, only when a
+    # predicate actually exists, so a predicate-free repo pays nothing.
+    has_predicates = any(r[4] for r in rows)
+    next_symbol_line = _symbol_span_ends(index) if has_predicates else {}
 
     # Gather every git fact once (3 reads for the whole repo), then answer each node
     # in-memory. Plus a per-(rel, sha) cache so the 36 symbol nodes in one
@@ -242,7 +293,8 @@ def freshen(index, repo: str | Path) -> dict[str, Any]:
     fresh_edges: list[int] = []
     stale_edges: list[int] = []
     drift_by_node: dict[int, str] = {}
-    for node_id, rel, sha, kind in rows:
+    summary[BROKEN] = 0
+    for node_id, rel, sha, kind, predicate, line in rows:
         if kind in CLAIM_BEARING_KINDS:
             # Curated knowledge: the full traffic-light (🟢/🟡/🟠) diffed against the stamp.
             key = (rel, sha)
@@ -265,10 +317,36 @@ def freshen(index, repo: str | Path) -> dict[str, Any]:
                 full = state.drift_of(rel, None) if has_git else FRESH
                 level = UNCOMMITTED if full == UNCOMMITTED else FRESH
                 drift_cache[key] = level
+        # PREDICATE OVERRIDE (arrow 1, v8): if this node carries a re-runnable check, run
+        # it against the file's CURRENT text and let merge_signal fold the verdict into the
+        # drift level. BROKEN wins outright (claim wrong now — the GAP-A case drift can't
+        # see); CONFIRMED pulls an unrelated 🟡/🟠 down to 🟢 (the claim still holds, so the
+        # file-move was not a real staleness signal — GAP B); UNKNOWN leaves drift untouched.
+        # Token-free: a regex search over one file's text, no model, no git.
+        if predicate:
+            # normalise the lookup key to forward-slash (the span map is keyed that way);
+            # the loop's `rel` is the raw stored file_path, which on Windows uses '\\'.
+            end = next_symbol_line.get((rel.replace("\\", "/"), line)) if line else None
+            scoped = bool(line and end)
+            verdict = evaluate_predicate(repo, rel, predicate,
+                                         (line, end) if scoped else None)
+            # SCOPE-AWARE TRUST (adversarial review 2026-06-15). A SCOPED check (we know the
+            # symbol's span) is trusted both ways. An UNSCOPED whole-file check (no --line, and
+            # every commit-trailer predicate) is asymmetric:
+            #   • whole-file BROKEN  — the pattern is absent from the ENTIRE file, so the claim
+            #     is definitely false. SAFE to trust (no false alarm) — keeps GAP A working for
+            #     the common nudged path.
+            #   • whole-file CONFIRMED — the pattern was found SOMEWHERE, possibly an unrelated
+            #     function. This is the false-confirm the review reproduced, so we DOWNGRADE it
+            #     to UNKNOWN (defer to drift) rather than certify a green we can't trust.
+            from recall.predicate import BROKEN as _BROKEN, UNKNOWN as _UNKNOWN
+            if not scoped and verdict not in (_BROKEN, _UNKNOWN):
+                verdict = _UNKNOWN  # unscoped CONFIRMED -> defer, never a false confirm
+            level = merge_signal(level, verdict)
         drift_by_node[node_id] = level
         summary["checked"] += 1
         summary[level] += 1
-        # verified=1 only when fresh; any drift (🟡/🟠) flips outgoing edges to 0
+        # verified=1 only when fresh; any drift (🟡/🟠/🔴) flips outgoing edges to 0
         # so recall()'s relation walk renders the stale flag honestly.
         (fresh_edges if level == FRESH else stale_edges).append(node_id)
 
@@ -308,8 +386,12 @@ def _store_drift_meta(index, drift_by_node: dict[int, str]) -> None:
 
 
 def drift_counts(index) -> dict[str, int]:
-    """Read the last freshen()'s per-node drift levels back from meta, as counts."""
-    counts = {FRESH: 0, COMMITTED: 0, UNCOMMITTED: 0}
+    """Read the last freshen()'s per-node drift levels back from meta, as counts.
+
+    Includes BROKEN (🔴, arrow 1): a node whose predicate failed re-verification. It's a
+    distinct count from the SHA-drift levels so a consumer can show the new red separately
+    (the claim is wrong, not merely on a moved file)."""
+    counts = {FRESH: 0, COMMITTED: 0, UNCOMMITTED: 0, BROKEN: 0}
     for (level,) in index.db.execute(
         "SELECT value FROM meta WHERE key LIKE 'drift:%'"
     ).fetchall():

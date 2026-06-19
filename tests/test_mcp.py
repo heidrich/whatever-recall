@@ -67,11 +67,13 @@ def test_unknown_method_is_32601(tmp_path):
 
 
 # -------------------------------------------------------------------- tools
-def test_tools_list_exposes_seven_tools_without_handlers(tmp_path):
+def test_tools_list_exposes_all_tools_without_handlers(tmp_path):
     s = _Session(_repo_with_index(tmp_path))
     tools = handle(_req("tools/list"), s)["result"]["tools"]
+    # the 8 original serves + the arrow-3 (impact/precedent) and code-intel serves added 2026-06-15
     assert [t["name"] for t in tools] == [
-        "recall", "brief", "explain", "stamp", "contested", "freshen", "dashboard"]
+        "recall", "brief", "explain", "resolve", "stamp", "contested", "freshen", "dashboard",
+        "impact", "precedent", "callers", "dead_code", "untested", "cycles"]
     for t in tools:
         assert set(t) == {"name", "title", "description", "inputSchema"}  # no handler leak
         assert t["inputSchema"]["type"] == "object"
@@ -148,7 +150,8 @@ def test_stdio_roundtrip_subprocess(tmp_path):
     out = [json.loads(ln) for ln in lines]   # every stdout line IS a JSON message
     by_id = {m.get("id"): m for m in out}
     assert by_id[1]["result"]["serverInfo"]["name"] == "recall"
-    assert len(by_id[2]["result"]["tools"]) == 7
+    from recall.mcp import _TOOLS  # tool count is registry-derived, not hardcoded
+    assert len(by_id[2]["result"]["tools"]) == len(_TOOLS)
     assert "workspace_id" in by_id[3]["result"]["content"][0]["text"]
     assert by_id[None]["error"]["code"] == -32700
     assert by_id[4]["result"] == {}
@@ -174,10 +177,11 @@ def test_initialize_declares_prompts_capability(tmp_path):
     assert "prompts" in out["result"]["capabilities"]
 
 
-def test_prompts_list_exposes_four_slash_commands(tmp_path):
+def test_prompts_list_exposes_the_slash_commands(tmp_path):
     s = _Session(_repo_with_index(tmp_path))
     prompts = handle(_req("prompts/list"), s)["result"]["prompts"]
-    assert [p["name"] for p in prompts] == ["recall", "brief", "explain", "dashboard"]
+    # `push` (workstream A) is a user-invoked PROMPT, not a lingering tool
+    assert [p["name"] for p in prompts] == ["recall", "brief", "explain", "resolve", "dashboard", "push"]
     for p in prompts:
         assert set(p) == {"name", "title", "description", "arguments"}  # no handler leak
     args = {p["name"]: p["arguments"] for p in prompts}
@@ -185,6 +189,8 @@ def test_prompts_list_exposes_four_slash_commands(tmp_path):
                                  "description": "your question or search terms",
                                  "required": True}
     assert args["explain"] == []
+    # push args are both optional (file and/or task; with neither it degrades to the state block)
+    assert all(not arg["required"] for arg in args["push"])
 
 
 def test_prompts_get_embeds_the_live_result(tmp_path):
@@ -203,6 +209,25 @@ def test_prompts_get_unknown_and_missing_arg_are_32602(tmp_path):
     assert handle(_req("prompts/get", name="nope"), s)["error"]["code"] == -32602
     out = handle(_req("prompts/get", name="brief", arguments={}), s)
     assert out["error"]["code"] == -32602 and "file" in out["error"]["message"]
+
+
+def test_unlicensed_prompts_get_returns_messages_shape(tmp_path, monkeypatch):
+    """bug-hunt MEDIUM (2026-06-17): the signed-out prompts/get answer must be a
+    GetPromptResult ({description, messages}), NOT a CallToolResult ({content,
+    isError}). The old branch returned the tools/call shape, so a spec client found no
+    top-level `messages` and rendered nothing — the 'sign in' instruction never reached
+    the slash-command user. Drive it signed-out and assert the shape + the sign-in text."""
+    import recall.mcp as mcp
+    monkeypatch.setattr(mcp, "_licensed", lambda: False)
+    s = _Session(_repo_with_index(tmp_path))
+    out = handle(_req("prompts/get", name="recall", arguments={"query": "x"}), s)
+    res = out["result"]
+    assert "messages" in res, "unlicensed prompts/get must use the GetPromptResult shape"
+    assert "content" not in res and "isError" not in res, "must NOT use the tools/call shape"
+    assert res["messages"][0]["content"]["text"] == mcp._NOT_SIGNED_IN
+    # and tools/call when signed out keeps its own (correct) content/isError shape
+    tc = handle(_req("tools/call", name="recall", arguments={"query": "x"}), s)
+    assert tc["result"]["isError"] is True and "recall login" in tc["result"]["content"][0]["text"]
 
 
 # ------------------------------------------------------------- dashboard tool
