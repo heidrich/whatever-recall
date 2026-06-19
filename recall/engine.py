@@ -111,6 +111,7 @@ class Index:
         outcome: str | None = None,
         visibility: str = "team",
         dedup: bool = True,
+        update_id: int | None = None,
         consumer: str = "cli",
     ) -> dict[str, Any]:
         """Stamp a node. Returns {action: NEW|MERGE, node_id, ...}.
@@ -213,9 +214,45 @@ class Index:
                 self._log(title[:120], nid, 0, 1,
                           round((time.perf_counter() - t0) * 1_000_000), consumer, kind="stamp")
 
+        # UPDATE BY ID — the explicit, fast, unambiguous path (Owner: "ids gehen schneller,
+        # man kann nicht immer nach namen suchen"). Like a PM task: same name allowed, the
+        # ID is the identity. `recall stamp --id N` edits exactly node N, no dedup guessing.
+        if update_id is not None:
+            row = self.db.execute("SELECT id FROM nodes WHERE id=?", (update_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"no node with id {update_id} to update")
+            self.db.execute(
+                "UPDATE nodes SET title=?, body=COALESCE(?,body) WHERE id=?",
+                (title, body, update_id),
+            )
+            if predicate is not None:
+                self.db.execute("UPDATE nodes SET predicate=? WHERE id=?", (predicate, update_id))
+            if outcome is not None:
+                self.db.execute("UPDATE nodes SET outcome=? WHERE id=?", (outcome, update_id))
+            if visibility == "private":
+                self.db.execute("UPDATE nodes SET visibility='private' WHERE id=?", (update_id,))
+            if anchor_set:
+                self._add_anchors(update_id, anchor_set)
+            if facets:
+                self._merge_facets(update_id, facets)
+            self.db.commit()
+            _log_stamp(update_id)
+            return {"action": "UPDATE", "node_id": update_id, "anchors": len(anchor_set)}
+
         if dedup and anchor_set:
             existing, overlap = self._dedup_via_recall(anchor_set)
+            # MERGE GATE — identity, not a similarity guess (Owner dogfood, 2026-06-20:
+            # two distinct lessons on the SAME single file collapsed into one and the
+            # second's body was lost). Two conditions BOTH required to merge:
+            #   1. anchor overlap clears the threshold (it's about the same place), AND
+            #   2. a node with the SAME normalized title is anchored there (it's the same
+            #      note — a re-stamp keeps its title; a new lesson brings a new one).
+            # Otherwise it's a NEW note, even on a shared file. Deterministic, no mis-tune.
             if existing is not None and overlap >= self.rules.dedup_threshold:
+                existing = self._same_titled_anchored_node(title, anchor_set)
+            else:
+                existing = None
+            if existing is not None:
                 added = self._add_anchors(existing, anchor_set)  # enrich, don't duplicate
                 if facets:
                     self._merge_facets(existing, facets)
@@ -2750,6 +2787,49 @@ class Index:
                 "SELECT DISTINCT term FROM fts_anchors WHERE node_id=?", (node_id,)
             ).fetchall()
         }
+
+    @staticmethod
+    def _norm_title(t: str) -> str:
+        return re.sub(r"\s+", " ", (t or "").strip().lower())
+
+    @staticmethod
+    def _content_overlap(a: str, b: str) -> float:
+        """Word-set Jaccard — how much two strings actually SAY the same. Used to tell a
+        re-worded re-statement (high overlap) from a genuinely different note (low)."""
+        def words(s: str) -> set[str]:
+            return {w for w in re.findall(r"[a-z0-9_]+", (s or "").lower()) if len(w) > 2}
+        wa, wb = words(a), words(b)
+        if not wa or not wb:
+            return 0.0
+        return len(wa & wb) / len(wa | wb)
+
+    def _same_titled_anchored_node(self, title: str, anchor_set: set[str]) -> int | None:
+        """The node that IS this note: same normalized title, sharing an anchor.
+
+        Identity, not similarity (Owner dogfood 2026-06-20: anchor-overlap alone merged
+        two distinct lessons on one file and lost a body). The title is the note's name;
+        a re-stamp keeps it, a new lesson brings a new one. Same name + shared anchor =
+        the same note → merge/re-stamp. Different name = a new note, even on the same
+        file. `--id` is the explicit fast path; this is the no-id convenience default."""
+        if not anchor_set:
+            return None
+        want = self._norm_title(title)
+        match = _fts_match(anchor_set)
+        rows = self.db.execute(
+            "SELECT DISTINCT node_id FROM fts_anchors WHERE term MATCH ?", (match,)
+        ).fetchall()
+        best, best_sim = None, 0.0
+        for (nid,) in rows:
+            r = self.db.execute("SELECT title FROM nodes WHERE id=?", (nid,)).fetchone()
+            if not r or not (anchor_set & self._node_anchor_set(nid)):
+                continue
+            cand = self._norm_title(r[0])
+            # exact title = certain same note; otherwise high word-overlap = a re-worded
+            # re-statement of the same note. A merely-different title is a NEW note.
+            sim = 1.0 if cand == want else self._content_overlap(want, cand)
+            if sim > best_sim:
+                best, best_sim = nid, sim
+        return best if best_sim >= 0.6 else None
 
     # ----------------------------------------------------------- write helpers
     def _insert_node(

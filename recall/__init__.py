@@ -13,5 +13,5 @@ Public surface:
 from recall.engine import Index
 from recall.db import SCHEMA_VERSION
 
-__version__ = "1.0.0"
+__version__ = "1.0.3"
 __all__ = ["Index", "SCHEMA_VERSION", "__version__"]

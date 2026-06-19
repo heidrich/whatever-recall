@@ -726,9 +726,10 @@ def cmd_stamp(args) -> int:
             predicate=args.predicate,
             outcome=getattr(args, "outcome", None),
             visibility=visibility,
+            update_id=getattr(args, "update_id", None),
             origin="live",
         )
-    except ValueError as e:  # unparseable predicate — fail loud, don't store a dead check
+    except ValueError as e:  # unparseable predicate / bad --id — fail loud
         print(_c(f"✗ {e}", C.RED))
         return 1
     # New knowledge on a file invalidates its edit-gate ack: the next edit must re-brief
@@ -737,7 +738,9 @@ def cmd_stamp(args) -> int:
         from recall import editgate
         editgate.clear(_index_path(repo).parent, repo, args.file)
     if r["action"] == "MERGE":
-        print(_c(f"✓ merged into: {r['into']}", C.GREEN) + _c(f"  (overlap {r['overlap']})", C.DIM))
+        print(_c(f"✓ merged into: {r['into']}", C.GREEN) + _c(f"  (#{r['node_id']} · overlap {r['overlap']})", C.DIM))
+    elif r["action"] == "UPDATE":
+        print(_c(f"✓ updated #{r['node_id']}", C.GREEN) + _c(f"  ({r['anchors']} anchors)", C.DIM))
     else:
         print(_c(f"✓ stamped #{r['node_id']}", C.GREEN) + _c(f"  ({r['anchors']} anchors)", C.DIM))
     if visibility == "private":
@@ -2221,6 +2224,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     ps = sub.add_parser("stamp", help="stamp a node by hand")
     ps.add_argument("title")
+    ps.add_argument("--id", type=int, default=None, dest="update_id",
+                    help="update EXACTLY this node id (fast, unambiguous) instead of "
+                         "creating a new one — like editing a task by its id, not its name")
     ps.add_argument("--body", default=None)
     ps.add_argument("--anchors", default=None, help="comma-separated")
     ps.add_argument("--tags", default=None, help="comma-separated")

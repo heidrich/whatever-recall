@@ -67,14 +67,53 @@ def test_facet_weight_orders_results():
 
 
 def test_dedup_via_recall_merges_restatement():
+    """A real RE-STATEMENT (same title) of a note merges — that's a re-stamp."""
     idx = Index.open(":memory:")
     idx.stamp(title="RLS cutover writers set workspace_id on insert",
               anchors=["rls_cutover", "workspace_id", "insert", "scope-spalte", "uploads", "tenancy", "writer"])
     before = idx.stats()["nodes"]
-    r = idx.stamp(title="After tenancy switch uploads vanish for owner",
+    r = idx.stamp(title="RLS cutover writers set workspace_id on insert",
+                  body="edited explanation",
                   anchors=["rls_cutover", "workspace_id", "insert", "scope-spalte", "uploads", "tenancy", "writer"])
     assert r["action"] == "MERGE"
     assert idx.stats()["nodes"] == before  # no new node
+
+
+def test_distinct_lessons_same_anchor_stay_separate():
+    """Owner dogfood 2026-06-20: two DIFFERENT lessons stamped on the SAME single file
+    must NOT collapse into one (the second's body was being lost). Identity is the
+    title, not the anchor. A fresh title = a new note, even on a shared anchor."""
+    idx = Index.open(":memory:")
+    a = ["internal/app-demo/index.html"]
+    idx.stamp(title="App-Demo flat panels not glass", body="glass made content unreadable", anchors=a)
+    before = idx.stats()["nodes"]
+    r = idx.stamp(title="App-Demo blast is the WHERE chain is the WHY", body="merged two effects into one", anchors=a)
+    assert r["action"] == "NEW"
+    assert idx.stats()["nodes"] == before + 1
+    # both bodies survive — the bug was that the second body vanished on merge
+    bodies = [row[0] for row in idx.db.execute(
+        "SELECT body FROM nodes WHERE title LIKE 'App-Demo%'").fetchall()]
+    assert any("unreadable" in (b or "") for b in bodies)        # first lesson's body
+    assert any("merged two effects" in (b or "") for b in bodies)  # second lesson's body
+
+
+def test_stamp_update_by_id_edits_exact_node():
+    """`--id N` edits exactly node N (PM-task semantics: ids are identity), no dedup guess."""
+    idx = Index.open(":memory:")
+    a = ["internal/app-demo/index.html"]
+    r1 = idx.stamp(title="App-Demo flat panels", body="v1", anchors=a)
+    nid = r1["node_id"]
+    before = idx.stats()["nodes"]
+    r2 = idx.stamp(title="App-Demo flat panels (renamed)", body="v2", anchors=a, update_id=nid)
+    assert r2["action"] == "UPDATE" and r2["node_id"] == nid
+    assert idx.stats()["nodes"] == before  # updated in place, no new node
+
+
+def test_stamp_update_by_unknown_id_errors():
+    import pytest
+    idx = Index.open(":memory:")
+    with pytest.raises(ValueError):
+        idx.stamp(title="ghost", update_id=999999)
 
 
 def test_dedup_lets_foreign_topic_through():
