@@ -3170,9 +3170,9 @@ class Index:
                     surfaced_calls += 1
         # workstream E: per-consumer EMITTED response size (the context tax, MEASURED in chars).
         # Sums resp_chars over rows that carry it — the 'served' MCP rows AND the threaded 'state'
-        # block row — so it captures what entered context. Recall-ABSOLUTE only (no jcode arm, no
-        # 2-arm %). Tokens are derived at the CLI boundary (the arms.py contract self-labels which
-        # tokenizer); the engine stays text/tokenizer-free (ADR-014).
+        # block row — so it captures what entered context. Recall-ABSOLUTE only (a single arm, no
+        # comparison-baseline arm, no 2-arm %). Tokens are derived at the CLI boundary (the arms.py
+        # contract self-labels which tokenizer); the engine stays text/tokenizer-free (ADR-014).
         emit_rows = self.db.execute(
             "SELECT consumer, COUNT(*) AS serves, COALESCE(SUM(resp_chars),0) AS chars "
             "FROM access_log WHERE ts >= strftime('%s','now',?) AND resp_chars > 0 "
