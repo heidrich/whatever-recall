@@ -2781,10 +2781,18 @@ class Index:
         return best, best_ratio
 
     def _node_anchor_set(self, node_id: int) -> set[str]:
+        # Read a node's anchors from the INDEXED relational tables (node_anchors has
+        # idx_na_node on node_id), NOT from fts_anchors. fts_anchors is an FTS5 virtual
+        # table with `node_id UNINDEXED` — a `WHERE node_id=?` there can't use an index
+        # and effectively scans, which made this the init hot-path (profiled: 40s of a
+        # 72s full re-index spent in here via _dedup_via_recall). The relational join is
+        # an indexed point-lookup. The two stay in sync (every _add_anchors writes both).
         return {
             r[0]
             for r in self.db.execute(
-                "SELECT DISTINCT term FROM fts_anchors WHERE node_id=?", (node_id,)
+                "SELECT a.term FROM node_anchors na JOIN anchors a ON a.id=na.anchor_id "
+                "WHERE na.node_id=?",
+                (node_id,),
             ).fetchall()
         }
 
@@ -2810,23 +2818,48 @@ class Index:
         two distinct lessons on one file and lost a body). The title is the note's name;
         a re-stamp keeps it, a new lesson brings a new one. Same name + shared anchor =
         the same note → merge/re-stamp. Different name = a new note, even on the same
-        file. `--id` is the explicit fast path; this is the no-id convenience default."""
+        file. `--id` is the explicit fast path; this is the no-id convenience default.
+
+        PERF (2026-06-20): the old path ran `term MATCH <all anchors>` (an OR over every
+        anchor) → it pulled HUNDREDS of nodes that merely share a file-anchor (every
+        code-symbol of engine.py/cli.py), then did an N+1 `_node_anchor_set` fetchall per
+        candidate. On a full repo that is O(n²): `recall init` spent ~24 min (profiled:
+        65s of 71s in here) just deduping the knowledge layer. Now we drive off the title
+        index first (idx_nodes_title) — the SELECTIVE key — and only anchor-check the few
+        same-title rows. The re-worded fallback (different title, high word-overlap) keeps
+        the FTS path but BOUNDED (top-N by shared-anchor hits, like _dedup_via_recall)."""
         if not anchor_set:
             return None
         want = self._norm_title(title)
+
+        # ── fast path: exact normalized title (uses idx_nodes_title). A re-stamp keeps
+        #    its title, so this is the dominant case. Only the same-title rows get the
+        #    anchor-overlap check — a handful, not hundreds.
+        same_title = self.db.execute(
+            "SELECT id FROM nodes WHERE lower(trim(title))=? LIMIT 64", (want,)
+        ).fetchall()
+        for (nid,) in same_title:
+            if anchor_set & self._node_anchor_set(nid):
+                return nid  # exact title + shared anchor = certainly the same note
+
+        # ── re-worded fallback: a different title that SAYS the same thing AND shares an
+        #    anchor. Bounded to the top candidates by shared-anchor count so this can
+        #    never scan the whole anchor-sharing set again (the O(n²) trap above).
         match = _fts_match(anchor_set)
         rows = self.db.execute(
-            "SELECT DISTINCT node_id FROM fts_anchors WHERE term MATCH ?", (match,)
+            "SELECT node_id, COUNT(*) AS hits FROM fts_anchors WHERE term MATCH ? "
+            "GROUP BY node_id ORDER BY hits DESC LIMIT 8",
+            (match,),
         ).fetchall()
         best, best_sim = None, 0.0
-        for (nid,) in rows:
+        for nid, _hits in rows:
             r = self.db.execute("SELECT title FROM nodes WHERE id=?", (nid,)).fetchone()
             if not r or not (anchor_set & self._node_anchor_set(nid)):
                 continue
             cand = self._norm_title(r[0])
-            # exact title = certain same note; otherwise high word-overlap = a re-worded
-            # re-statement of the same note. A merely-different title is a NEW note.
-            sim = 1.0 if cand == want else self._content_overlap(want, cand)
+            if cand == want:
+                return nid  # (shouldn't reach here — fast path caught it — but be safe)
+            sim = self._content_overlap(want, cand)
             if sim > best_sim:
                 best, best_sim = nid, sim
         return best if best_sim >= 0.6 else None

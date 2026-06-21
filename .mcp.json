@@ -4,7 +4,10 @@
       "command": "recall",
       "args": [
         "mcp"
-      ]
+      ],
+      "env": {
+        "RECALL_LICENSE_POLICY": "read-free"
+      }
     }
   }
 }

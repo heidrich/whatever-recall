@@ -45,6 +45,24 @@ def test_resolves_at_alias_to_src():
     assert resolve_import("@/components/Thing", "src/a.ts", files) == "src/components/Thing.tsx"
 
 
+def test_resolves_at_alias_per_monorepo_app_root():
+    # A monorepo ships several Next.js apps (web/, admin/, app/) each with its OWN
+    # tsconfig `"@/*": ["./src/*"]`. `@/x` must resolve to the IMPORTING file's app
+    # root, not the repo root — before this fix web/admin had ~0 edges (all @/ dropped).
+    web = _files("web/src/lib/api.ts", "web/src/page.tsx")
+    assert resolve_import("@/lib/api", "web/src/page.tsx", web) == "web/src/lib/api.ts"
+    admin = _files("admin/src/components/Table.tsx", "admin/src/page.tsx")
+    assert resolve_import("@/components/Table", "admin/src/page.tsx", admin) == "admin/src/components/Table.tsx"
+
+
+def test_at_alias_does_not_cross_app_boundary():
+    # An admin file's `@/only` must NOT resolve to a same-named file in web/ — the
+    # nearer app root wins and the repo-root candidate isn't present here ("a wrong
+    # edge is worse than no edge").
+    files = _files("web/src/only.ts", "admin/src/page.tsx")
+    assert resolve_import("@/only", "admin/src/page.tsx", files) is None
+
+
 def test_resolves_directory_to_index_file():
     files = _files("src/a.ts", "src/lib/index.ts")
     assert resolve_import("./lib", "src/a.ts", files) == "src/lib/index.ts"

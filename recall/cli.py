@@ -117,8 +117,18 @@ def _c(s: str, code: str) -> str:
 def cmd_init(args) -> int:
     from recall.bootstrap import init  # lazy: tree-sitter import only when indexing
 
+    as_json = getattr(args, "json", False)
+
+    def _fail_json(reason: str) -> int:
+        import json as _json
+        from recall import __version__ as ver
+        print(_json.dumps({"ok": False, "reason": reason, "engine": "recall", "version": ver}))
+        return 1
+
     repo = Path(args.path).resolve()
     if not repo.exists():
+        if as_json:
+            return _fail_json("path-not-found")
         print(_c(f"path not found: {repo}", C.RED))
         return 1
     idx_path = _index_path(repo)
@@ -131,16 +141,44 @@ def cmd_init(args) -> int:
         # index (merge artifact, interrupted write — 'file is not a database') should
         # self-heal: drop it and build fresh, rather than dying on a raw sqlite error.
         # (P3 bug-hunt 2026-06-15; lock-vs-corruption split added round 2.)
-        print(_c(f"recall · existing index at {idx_path} is unreadable — rebuilding", C.MUSTARD))
+        if not as_json:
+            print(_c(f"recall · existing index at {idx_path} is unreadable — rebuilding", C.MUSTARD))
         try:
             idx_path.unlink()
         except OSError as e:
+            if as_json:
+                return _fail_json("corrupt-unremovable")
             print(_c(f"could not remove the corrupt index: {e}", C.RED))
             return 1
         idx = Index.open(idx_path, repo=repo)
-    print(_c(f"recall · indexing {repo} …", C.DIM))
+    if not as_json:
+        print(_c(f"recall · indexing {repo} …", C.DIM))
     st = init(idx, repo, max_commits=args.max_commits, code_map=not args.no_code_map)
     s = idx.stats()
+
+    if as_json:
+        import json as _json
+        from recall import __version__ as ver
+        # seed the state block (same best-effort as the human path) before emitting.
+        try:
+            block = idx.render_state_block()
+            wrapped = f"{idx.STATE_BEGIN}\n{block}\n{idx.STATE_END}"
+            seed = repo / ("CLAUDE.md" if (repo / "CLAUDE.md").exists() else "AGENTS.md")
+            existing = seed.read_text(encoding="utf-8") if seed.exists() else ""
+            if idx.STATE_BEGIN not in existing:
+                seed.write_text((existing.rstrip() + "\n\n" if existing.strip() else "")
+                                + wrapped + "\n", encoding="utf-8")
+        except Exception:
+            pass
+        print(_json.dumps({
+            "ok": True, "engine": "recall", "version": ver,
+            "repo": str(repo), "name": repo.name,
+            "nodes": s["nodes"], "edges": s["edges"], "anchors": s["anchors"],
+            "codeSymbols": st.get("code_symbols", 0), "commits": st.get("commits", 0),
+            "lessons": st.get("lessons", 0),
+            "gitError": st.get("git_error") or "",
+        }))
+        return 0
     print(_c("✓ indexed", C.GREEN) + f"  →  {_c(str(s['nodes']), C.B)} nodes, "
           f"{s['anchors']} anchors")
     parts = []
@@ -289,6 +327,192 @@ def cmd_receipt(args) -> int:
             pct = 100.0 * (total_chars // 4) / max(1, int(st))
             print(_c(f"  recall = {pct:.1f}% of the {int(st)}-token session "
                      f"(per-call emitted ÷ the session total you supplied)", C.DIM))
+    return 0
+
+
+def cmd_graph(args) -> int:
+    """Dump the stamped graph as JSON for the desktop app (the CORE view).
+
+    Read-only, 0 model tokens — two SELECTs over the v11 schema, projected down to a
+    FILE graph (the app keys nodes by file id). The app computes ALL the rest itself
+    (3D layout, layers, blast/hopMap/importance), so the engine only ships raw
+    {nodes, edges}. The SAME command later feeds the brain dataset via --kind.
+
+    Honest-by-construction safety: every drift level and edge kind is collapsed into
+    the app's CLOSED sets (fresh/moved/broken/gone · depends/co/guards/relates) here,
+    so the renderer never meets an unknown enum key (the prior crash root-cause)."""
+    import json as _json
+    from recall import __version__ as ver
+
+    repo = _repo_from_args(args)
+    idx = _open_existing(repo)
+    if idx is None:
+        # no index → a CLEAN fallback signal, not an error (exit 0): the app shows seed.
+        print(_json.dumps({"ok": False, "reason": "no-index", "engine": "recall", "version": ver}))
+        return 0
+
+    db = idx.db
+    cap = max(10, min(400, getattr(args, "limit", 140) or 140))
+
+    # drift:<node_id> → the app's freshness verdict (closed set). committed/uncommitted
+    # both read as "moved" (the file drifted from where the claim was stamped).
+    DRIFT_TO_FRESH = {"fresh": "fresh", "committed": "moved", "uncommitted": "moved", "broken": "broken"}
+    drift = {}
+    for r in db.execute("SELECT key, value FROM meta WHERE key LIKE 'drift:%'"):
+        drift[r[0].split(":", 1)[1]] = DRIFT_TO_FRESH.get(r[1], "fresh")
+
+    # edge kind → the app's EDGE_COLOR set (depends/co/guards/relates). Anything the
+    # engine adds later falls to "relates" (safe default), never an unknown key.
+    KIND_MAP = {
+        "depends_on": "depends", "implements": "depends", "calls": "depends",
+        "co_changed": "co",
+        "guarded_by": "guards", "guards": "guards", "warns_about": "guards",
+        "relates_to": "relates", "supersedes": "relates", "decided_by": "relates", "presents": "relates",
+    }
+
+    norm = lambda p: p.replace("\\", "/") if p else p  # noqa: E731
+
+    # generated / throwaway dirs that are NOT real architecture — they bury the
+    # actual code-graph in noise (e.g. proof/_runs/* fixtures = 40% of nodes on this
+    # repo) and skew importance/blast. Filtered out of the file-graph by path prefix.
+    NOISE_PREFIXES = ("proof/", "experiments/", ".venv/", "node_modules/", "dist/",
+                      "build/", ".mind/", "__pycache__/", ".git/")
+    NOISE_MARKERS = ("/_runs/", "past-incident", "/run_with/", "/run_without/")
+
+    def _is_noise(path: str) -> bool:
+        p = path.lstrip("./")
+        return p.startswith(NOISE_PREFIXES) or any(m in path for m in NOISE_MARKERS)
+
+    # PHANTOM-NODE GUARD (2026-06-20): a few code-symbol rows carry a file_path that is a
+    # BASENAME or a non-file token (e.g. 'cli.py' instead of 'recall/cli.py', 'ADR-008',
+    # 'decisions.md') — stamp-time artifacts. They surface as ghost top-level "files" that
+    # the app then reads as their OWN sub-system, fracturing the cluster layout (Welle B
+    # derives sub-system from the path's first segment). Drop any node whose file_path
+    # doesn't resolve to a real file in the repo. Cheap: one set built from os.walk once.
+    from pathlib import Path as _P
+    _real_files: set[str] = set()
+    try:
+        _root = _P(repo).resolve()
+        for _dp, _dns, _fns in os.walk(_root):
+            # prune heavy/irrelevant dirs in-place (mirrors NOISE_PREFIXES) so the walk is fast
+            _dns[:] = [d for d in _dns if d not in
+                       ("node_modules", ".git", ".venv", "dist", "build", "__pycache__", ".next", ".mind")]
+            for _fn in _fns:
+                _real_files.add((_P(_dp) / _fn).resolve().relative_to(_root).as_posix())
+    except OSError:
+        _real_files = set()  # can't walk → don't filter (degrade to old behaviour, never crash)
+
+    def _is_real_file(path: str) -> bool:
+        # empty set = walk failed → keep everything (safe degrade). Otherwise require a hit.
+        return (not _real_files) or (path in _real_files)
+
+    # ── nodes: code files only (the code-graph). Group code-symbol rows by file_path,
+    #    take the max importance + the file's node-id (for drift lookup). private out. ──
+    file_rows: dict[str, dict] = {}
+    for r in db.execute(
+        "SELECT id, file_path, importance, visibility FROM nodes "
+        "WHERE kind='code-symbol' AND file_path IS NOT NULL AND file_path <> ''"
+    ):
+        if (r[3] or "team") == "private":
+            continue
+        f = norm(r[1])
+        if _is_noise(f):
+            continue
+        if not _is_real_file(f):
+            continue   # phantom: basename-only / non-file token, not a real repo file
+        cur = file_rows.get(f)
+        imp = r[2] if r[2] is not None else 0.0
+        fresh = drift.get(str(r[0]), "fresh")
+        if cur is None:
+            file_rows[f] = {"id": f, "imp": imp, "fresh": fresh}
+        else:
+            if imp > cur["imp"]:
+                cur["imp"] = imp
+            if fresh != "fresh":  # the loudest verdict on any of the file's symbols wins
+                cur["fresh"] = fresh
+
+    # ── edges: resolve src/dst to file_path, project to file→file, dedup, drop
+    #    self-loops + edges touching a private/unknown file. ──
+    seen_edges: set[tuple] = set()
+    raw_edges: list[tuple] = []
+    for r in db.execute(
+        "SELECT REPLACE(ns.file_path,'\\','/') AS a, REPLACE(nd.file_path,'\\','/') AS b, e.kind "
+        "FROM edges e JOIN nodes ns ON ns.id=e.src_node JOIN nodes nd ON nd.id=e.dst_node "
+        "WHERE ns.file_path IS NOT NULL AND nd.file_path IS NOT NULL"
+    ):
+        a, b, k = r[0], r[1], r[2]
+        if not a or not b or a == b:
+            continue
+        if a not in file_rows or b not in file_rows:
+            continue
+        kind = KIND_MAP.get(k, "relates")
+        key = (a, b, kind)
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        raw_edges.append((a, b, kind))
+
+    # ── KNOWLEDGE: the recall MOAT — files the brain has STAMPED (lessons / decisions /
+    #    tasks anchored to a file_path). This is what an editor/LSP can NEVER show: "this
+    #    file carries a decision". Folded onto the file node as `knowledge` so the app draws
+    #    the glow aura. Counts the loudest tag so the aura can colour by kind. ──
+    KN_KINDS = ("lesson", "task")  # decisions are stored as lesson rows with a tag in recall
+    know: dict[str, dict] = {}
+    for r in db.execute(
+        "SELECT REPLACE(file_path,'\\','/') AS f, kind, COUNT(*) FROM nodes "
+        "WHERE kind IN ('lesson','task') AND file_path IS NOT NULL AND file_path <> '' "
+        "AND (visibility IS NULL OR visibility <> 'private') GROUP BY f, kind"
+    ):
+        f = norm(r[0])
+        if not f or f not in file_rows:
+            continue
+        e = know.setdefault(f, {"lesson": 0, "task": 0})
+        if r[1] in e:
+            e[r[1]] += r[2]
+
+    # ── GUARDS: a file PROTECTED by a stamped rule/lesson (guards / guarded_by /
+    #    warns_about edges). In recall these run from a LESSON node (no file_path) to the
+    #    code file it defends — so they don't survive the file→file edge scan above. Pull
+    #    them directly: the destination file gets a shield ("a rule defends this"). ──
+    guarded: set[str] = set()   # files defended by a stamped rule/lesson
+    for r in db.execute(
+        "SELECT REPLACE(nd.file_path,'\\','/') AS f FROM edges e "
+        "JOIN nodes nd ON nd.id=e.dst_node "
+        "WHERE e.kind IN ('guards','guarded_by','warns_about') "
+        "AND nd.file_path IS NOT NULL AND nd.file_path <> ''"
+    ):
+        f = norm(r[0])
+        if f and f in file_rows:
+            guarded.add(f)
+
+    # ── cap to a readable size (the seed is ~100 nodes; 1700 files is unreadable).
+    #    rank by importance + degree, keep the top `cap`, then keep only edges whose
+    #    BOTH endpoints survived the cap. ──
+    deg: dict[str, int] = {}
+    for a, b, _ in raw_edges:
+        deg[a] = deg.get(a, 0) + 1
+        deg[b] = deg.get(b, 0) + 1
+    ranked = sorted(file_rows.values(), key=lambda n: (n["imp"] + deg.get(n["id"], 0) * 8.0), reverse=True)
+    keep = {n["id"] for n in ranked[:cap]}
+
+    def _node(n: dict) -> dict:
+        f = n["id"]
+        out = {"id": f, "kind": "code", "fresh": n["fresh"],
+               "importance": round(n["imp"] / 100.0, 4) if n["imp"] else 0.0}
+        kn = know.get(f)
+        if kn and (kn["lesson"] or kn["task"]):
+            # tag = the dominant knowledge kind (lesson wins ties — it's the moat signal)
+            out["knowledge"] = {"lessons": kn["lesson"], "tasks": kn["task"],
+                                "tag": "decision" if kn["lesson"] else "task"}
+        if f in guarded:
+            out["guarded"] = True
+        return out
+
+    nodes = [_node(n) for n in ranked[:cap]]
+    edges = [[a, b, k] for (a, b, k) in raw_edges if a in keep and b in keep]
+
+    print(_json.dumps({"ok": True, "engine": "recall", "version": ver,
+                       "nodes": nodes, "edges": edges}))
     return 0
 
 
@@ -730,6 +954,10 @@ def cmd_stamp(args) -> int:
             origin="live",
         )
     except ValueError as e:  # unparseable predicate / bad --id — fail loud
+        if getattr(args, "json", False):
+            import json as _json
+            print(_json.dumps({"ok": False, "reason": str(e)}))
+            return 1
         print(_c(f"✗ {e}", C.RED))
         return 1
     # New knowledge on a file invalidates its edit-gate ack: the next edit must re-brief
@@ -737,6 +965,15 @@ def cmd_stamp(args) -> int:
     if args.file:
         from recall import editgate
         editgate.clear(_index_path(repo).parent, repo, args.file)
+    # --json: machine-readable for the desktop app's Stamp console.
+    if getattr(args, "json", False):
+        import json as _json
+        print(_json.dumps({
+            "ok": True, "action": r["action"], "nodeId": r.get("node_id"),
+            "into": r.get("into"), "anchors": r.get("anchors", 0),
+            "private": visibility == "private", "title": args.title,
+        }))
+        return 0
     if r["action"] == "MERGE":
         print(_c(f"✓ merged into: {r['into']}", C.GREEN) + _c(f"  (#{r['node_id']} · overlap {r['overlap']})", C.DIM))
     elif r["action"] == "UPDATE":
@@ -881,6 +1118,36 @@ def cmd_mcp(args) -> int:
     from recall import mcp  # lazy, like dashboard — the CLI core stays import-light
 
     return mcp.serve(args.repo)
+
+
+def cmd_snapshot(args) -> int:
+    """Dump the WHOLE index as one JSON snapshot — the same data the dashboard's
+    /api/data serves (lessons, stats, drift, code, tasks, product, git, …), via the
+    SAME build_snapshot() (one source of truth, no duplicated logic). This is the
+    desktop app's data seam: one call fills every tab. Read-only, 0 model tokens.
+
+    A missing index is a CLEAN signal (exit 0, ok:false), never an error — the app
+    shows its empty state, exactly like `recall stats --json`."""
+    import json as _json
+    from recall import __version__ as ver
+    from recall import dashboard
+
+    repo = _repo_from_args(args)
+    idx_path = _index_path(repo)
+    if not idx_path.exists():
+        print(_json.dumps({"ok": False, "reason": "no-index", "engine": "recall",
+                           "version": ver, "repo": str(repo), "name": Path(repo).name}))
+        return 0
+    idx = Index.open(idx_path, repo=repo)
+    try:
+        snap = dashboard.build_snapshot(idx, repo)
+    finally:
+        idx.db.close()
+    snap["ok"] = True
+    snap["engine"] = "recall"
+    snap["version"] = ver
+    print(_json.dumps(snap, ensure_ascii=False))
+    return 0
 
 
 def cmd_dashboard(args) -> int:
@@ -1091,9 +1358,61 @@ def cmd_hook(args) -> int:
     return 0
 
 
+def _git_head(repo: Path) -> dict:
+    """Best-effort git branch + commit count for the app's Topbar. Never raises:
+    a missing/absent git just yields blanks, so the desktop app shows the index
+    facts without a fake '668 commits' string."""
+    import subprocess
+    out = {"branch": "", "commits": 0, "head": ""}
+    try:
+        run = lambda a: subprocess.run(  # noqa: E731
+            ["git", "-C", str(repo), *a], capture_output=True, text=True, timeout=4
+        )
+        b = run(["rev-parse", "--abbrev-ref", "HEAD"])
+        if b.returncode == 0:
+            out["branch"] = b.stdout.strip()
+        c = run(["rev-list", "--count", "HEAD"])
+        if c.returncode == 0 and c.stdout.strip().isdigit():
+            out["commits"] = int(c.stdout.strip())
+        h = run(["rev-parse", "--short", "HEAD"])
+        if h.returncode == 0:
+            out["head"] = h.stdout.strip()
+    except Exception:  # noqa: BLE001 — git absent/odd checkout must not break stats
+        pass
+    return out
+
+
 def cmd_stats(args) -> int:
     repo = _repo_from_args(args)
     idx = _open_existing(repo)
+
+    # --json: machine-readable for the desktop app's Topbar / Index view. A missing
+    # index is a CLEAN signal (exit 0, ok:false), not an error — the app shows its
+    # empty state, never a fake count.
+    if getattr(args, "json", False):
+        import json as _json
+        from recall import __version__ as ver
+        if idx is None:
+            print(_json.dumps({"ok": False, "reason": "no-index", "engine": "recall",
+                               "version": ver, "repo": str(repo)}))
+            return 0
+        s = idx.stats()
+        from recall.freshness import drift_counts
+        d = drift_counts(idx)
+        git = _git_head(repo)
+        print(_json.dumps({
+            "ok": True, "engine": "recall", "version": ver, "repo": str(repo),
+            "name": Path(repo).name,
+            "branch": git["branch"], "commits": git["commits"], "head": git["head"],
+            "nodes": s["nodes"], "edges": s["edges"], "anchors": s["anchors"],
+            "recalls": s["recalls"], "surfaced": s["surfaced"],
+            "byKind": s["by_kind"],
+            "fresh": d.get("fresh", 0), "drifted": d.get("committed", 0),
+            "edited": d.get("uncommitted", 0), "broken": d.get("broken", 0),
+            "freshChecked": sum(d.values()),
+        }))
+        return 0
+
     if idx is None:
         print(_c(f"no index in {repo}", C.RED))
         return 1
@@ -2090,6 +2409,7 @@ def build_parser() -> argparse.ArgumentParser:
     pi.add_argument("path", nargs="?", default=".")
     pi.add_argument("--max-commits", type=int, default=400)
     pi.add_argument("--no-code-map", action="store_true", help="skip tree-sitter code map")
+    pi.add_argument("--json", action="store_true", help="machine-readable result for the desktop app")
     pi.set_defaults(func=cmd_init)
 
     pb = sub.add_parser("brief", help="pre-edit briefing for a file (why / what breaks / open tasks)")
@@ -2115,6 +2435,12 @@ def build_parser() -> argparse.ArgumentParser:
     prc.add_argument("--json", action="store_true", help="emit the raw receipt dict as JSON")
     prc.add_argument("--repo", default=None)
     prc.set_defaults(func=cmd_receipt)
+
+    pg = sub.add_parser("graph", help="dump the stamped file-graph as JSON for the desktop app (read-only, 0 tokens)")
+    pg.add_argument("--json", action="store_true", help="emit the graph as JSON (the only output mode)")
+    pg.add_argument("--limit", type=int, default=140, help="max files in the graph, ranked by importance + degree (default 140)")
+    pg.add_argument("--repo", default=None)
+    pg.set_defaults(func=cmd_graph)
 
     pa = sub.add_parser("ack", help="acknowledge a file's briefing so the hard pre-edit gate lets the edit through")
     pa.add_argument("file", help="the file you briefed and are about to edit (repo-relative)")
@@ -2243,6 +2569,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--private", action="store_true",
                     help="mark this note private: it stays in THIS brain and is left out of "
                          "`recall export` — your reasoning never leaves your machine/org unless you say so")
+    ps.add_argument("--json", action="store_true", help="machine-readable result for the desktop app")
     ps.add_argument("--repo", default=None)
     ps.set_defaults(func=cmd_stamp)
 
@@ -2260,7 +2587,14 @@ def build_parser() -> argparse.ArgumentParser:
     pt = sub.add_parser("stats", help="show index stats")
     pt.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
     pt.add_argument("--repo", default=None)
+    pt.add_argument("--json", action="store_true", help="machine-readable stats for the desktop app")
     pt.set_defaults(func=cmd_stats)
+
+    psn = sub.add_parser("snapshot", help="dump the whole index as one JSON snapshot for the desktop app (same data as the dashboard, read-only, 0 tokens)")
+    psn.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")
+    psn.add_argument("--repo", default=None)
+    psn.add_argument("--json", action="store_true", help="machine-readable (the only mode; flag accepted for symmetry)")
+    psn.set_defaults(func=cmd_snapshot)
 
     pd = sub.add_parser("dashboard", help="open the local dashboard (the wiki, visible)")
     pd.add_argument("path", nargs="?", default=None, help="project path (same as --repo; defaults to here)")

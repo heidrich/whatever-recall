@@ -1,10 +1,31 @@
 # whatever-recall
 
+## Stop paying your AI to re-read the same files.
+
+**Code that remembers *why* — read it back in 0 tokens.** Let AI write the memory at commit-time, let AI read it for free — and save millions of tokens your repo is burning on grep-and-guess.
+
+*write-time memory for AI coding agents · 0 model tokens to read · self-hosted · SHA-pinned, can't drift*
+
+[![version](https://img.shields.io/badge/version-1.0.3-2b2b2b)](https://whatever-recall.com)
+[![license](https://img.shields.io/badge/license-BSL%201.1-f5c518?labelColor=2b2b2b)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%2B-3776AB?labelColor=2b2b2b)](pyproject.toml)
+[![reader](https://img.shields.io/badge/read-0%20model%20tokens-2e7d32?labelColor=2b2b2b)](#measured-not-claimed)
+[![docs](https://img.shields.io/badge/docs-online-3b82f6?labelColor=2b2b2b)](https://whatever-recall.com/how-it-works)
+[![watch the preview](https://img.shields.io/badge/▶%20watch-v1.2%20preview-FF0000?labelColor=2b2b2b)](https://www.youtube.com/watch?v=5YOvo4bZjFg)
+
+**AI agents / LLMs:** read [`llms.txt`](https://whatever-recall.com/llms.txt) for a token-cheap map of the project · or open the [docs](https://whatever-recall.com/how-it-works).
+
 > ***I got sick of code being dumb in 2026 — so I built whatever-recall.***
 >
 > *For the bigger picture of why we built it — [read the letter from Christian →](LETTER.md)*
 
 **Every code-search tool optimizes the answer. recall makes the code self-aware enough to fix your AI's question first.**
+
+**▶ See it live — the v1.2 graph preview:**
+
+[![whatever-recall v1.2 — early preview](https://img.youtube.com/vi/5YOvo4bZjFg/hqdefault.jpg)](https://www.youtube.com/watch?v=5YOvo4bZjFg)
+
+*Early preview of v1.2 — not shipped yet. [Watch on YouTube →](https://www.youtube.com/watch?v=5YOvo4bZjFg)*
 
 Watch an AI work: it invents a symbol name from its training (`enforceSeats`? `seatLimit`?), greps your repo, misses, guesses again — **~214,000 tokens for three questions**, and its training is *misleading* it the whole time. recall captured what your repo really calls things at write-time, so it corrects the guess into the real name before the grep ever runs. No grep or embedding can do that — they never collected the truth.
 

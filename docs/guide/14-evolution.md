@@ -38,12 +38,11 @@ reading. An AI doesn't navigate by folders; it navigates the **graph** of how th
 code actually connects. recall already holds that graph. The evolution is to make
 **the graph the source of truth, and the file layout a view rendered from it.**
 
-![A 3D preview of recall's graph-native code view: an AI navigates the dependency graph, not the folder tree — code blocks stacked into glowing layers, wired by their real relationships and coloured by six relationship dimensions, with data flowing along the connections.](https://whatever-recall.com/preview/recall-ai-code-graph-3d-preview.webp)
+https://www.youtube.com/watch?v=5YOvo4bZjFg
 
-*A glimpse of the graph-native horizon — a prototype, not shipped yet. The blocks are
-files and symbols, the lines are recall's real edges (`depends_on`, `co_changed`,
-`implements`, `guarded_by`, `relates_to`, `decided_by`), and the flowing light is data
-moving along them.*
+*Early preview of v1.2 — not shipped yet. The blocks are files and symbols, the lines
+are recall's real edges (`depends_on`, `co_changed`, `implements`, `guarded_by`,
+`relates_to`, `decided_by`), and the flowing light is data moving along them.*
 
 ## Why this is the logical next step
 

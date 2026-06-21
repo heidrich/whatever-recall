@@ -151,7 +151,26 @@ def resolve_import(spec: str, from_rel: str, repo_files: set[str],
             candidates.append(joined)
     elif spec.startswith("@/"):
         rest = spec[2:]
-        candidates += [r + rest for r in alias_roots]
+        # `@/x` is the TS path alias `"@/*": ["./src/*"]`, defined PER tsconfig — and a
+        # monorepo has several (web/, admin/, app/ each ship their own). So `@/` is
+        # relative to the importing file's APP ROOT, not the repo root. We don't read
+        # tsconfigs; instead we walk every ancestor dir of `from_rel` as a candidate app
+        # root and offer `<root>/src/<rest>` (the standard layout) + `<root>/<rest>`
+        # (src-less). Nearest root first so web/src wins over repo-root for a web file.
+        # The membership check in _complete() is the safety net: only a real indexed file
+        # resolves, so the extra candidates never invent a wrong edge. Repo-root `@/`
+        # (the original ("src/","") behaviour) is still covered — root "" is the last
+        # ancestor. (monorepo @/-alias fix 2026-06-20: web/admin had ~0 edges.)
+        roots: list[str] = []
+        d = os.path.dirname(from_rel)
+        while True:
+            roots.append(d + "/" if d else "")
+            if not d:
+                break
+            d = os.path.dirname(d)
+        for r in roots:
+            candidates.append(r + "src/" + rest)
+            candidates.append(r + rest)
     elif "/" not in spec and "." in spec and not spec.endswith(_NONSOURCE_EXTS):
         # python dotted module: a.b.c -> a/b/c (also try under src/). The guard was
         # `endswith(_RESOLVE_EXTS)` — which includes '.c'/'.rs'/'.go'/'.ts'/… — so

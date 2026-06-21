@@ -59,6 +59,54 @@ def _post(path: str, body: dict, *, timeout: float = 8.0) -> tuple[int, dict]:
 # process teardown + help/version (argparse handles -h/--version before dispatch).
 FREE_COMMANDS = {"cmd_login", "cmd_logout", "cmd_stop"}
 
+# READ-FREE commands: the pure local-index READ path. 0 model tokens, no network,
+# no durable knowledge write (a usage-log row is fine). Freed under the 'read-free'
+# policy so reading your own memory never stops ('readable forever'). The paywall
+# stays on writes/stamps, team-sync/export, AI/power mode, and seat/admin.
+# NOTE: cmd_callers also serves the `callees` subcommand (same func object → same
+# __name__), so this one name frees both.
+READ_FREE_COMMANDS = {
+    "cmd_recall", "cmd_brief", "cmd_graph", "cmd_receipt", "cmd_contested",
+    "cmd_resolve", "cmd_precedent", "cmd_impact", "cmd_callers", "cmd_dead_code",
+    "cmd_untested", "cmd_cycles", "cmd_explain", "cmd_review", "cmd_stats",
+    "cmd_snapshot",  # the desktop app's whole-index read seam (same data as the dashboard)
+}
+
+# the GRAPH-ONLY subset — the most conservative read policy (just the desktop
+# app's graph source + its stats). A strict subset of READ_FREE_COMMANDS.
+GRAPH_FREE_COMMANDS = {"cmd_graph", "cmd_stats"}
+
+# ── LICENSE POLICY (switchable) ─────────────────────────────────────────────
+# Owner 2026-06-20: "können wir beide modelle nebeneinander entwickeln und
+# schalten wie wir das brauchen … sonst müssen wir alles neu bauen." → all models
+# live in the code at once; flip with RECALL_LICENSE_POLICY, no rebuild. Whether
+# we actually ship a given mode is a later call — they're all ready.
+#   all-free   → nothing is gated (every command runs without a license)
+#   read-free  → the whole local READ path is free; writes/sync/AI gated  [DEFAULT]
+#   graph-only → only graph + stats free; everything else gated
+#   gated      → only login/logout/stop free (the original strict behaviour)
+LICENSE_POLICIES = ("all-free", "read-free", "graph-only", "gated")
+_DEFAULT_POLICY = "read-free"
+
+
+def license_policy() -> str:
+    """The active license policy. RECALL_LICENSE_POLICY env overrides the code
+    default; an unknown/empty value falls back to the default (never crashes the
+    gate on a typo'd env var)."""
+    import os
+    val = (os.environ.get("RECALL_LICENSE_POLICY") or "").strip().lower()
+    return val if val in LICENSE_POLICIES else _DEFAULT_POLICY
+
+
+def _policy_free_commands(policy: str) -> set:
+    """The extra always-free command set contributed by the active policy (on top
+    of FREE_COMMANDS + ALLOW_LAUNCH_COMMANDS, which are free under every policy)."""
+    if policy == "read-free":
+        return READ_FREE_COMMANDS
+    if policy == "graph-only":
+        return GRAPH_FREE_COMMANDS
+    return set()  # 'gated' adds nothing; 'all-free' is handled before this is read
+
 # commands that are gated but must NEVER block on an interactive device-flow:
 #  - git hooks (cmd_hook installs them; cmd_precommit_check / cmd_stamp_commit ARE the
 #    hooks) run inside `git commit` with no usable TTY — a 10-minute poll would hang
@@ -359,7 +407,17 @@ def ensure_licensed(func_name: str, *, interactive: bool | None = None) -> None:
       the device-flow right here; otherwise (git hook, MCP, piped, CI, pythonw) raise
       a clear `recall login` message instead of hanging on the device-flow poll (P1/P2).
     """
+    # always-free + launch-allowed bypass the gate under every policy.
     if func_name in FREE_COMMANDS or func_name in ALLOW_LAUNCH_COMMANDS:
+        return
+
+    # the switchable LICENSE POLICY (RECALL_LICENSE_POLICY env, default 'read-free').
+    # This bypass sits BEFORE load_license()/seat-check, so a policy-free command
+    # works with NO token, an expired/pending token, or a kicked seat — reading
+    # never stops. 'all-free' frees everything; 'read-free'/'graph-only' free their
+    # subset; 'gated' adds nothing (original strict behaviour).
+    policy = license_policy()
+    if policy == "all-free" or func_name in _policy_free_commands(policy):
         return
 
     state = L.load_license()
@@ -404,9 +462,15 @@ def ensure_licensed(func_name: str, *, interactive: bool | None = None) -> None:
     elif state and state.get("pending"):
         msg = "finish signing in to start your 14-day trial"
     elif state and state.get("expired"):
-        msg = "your session has expired — sign in again"
+        # under read-free, reading kept working; this only fires on a gated (write/
+        # sync/AI) command — teach the boundary instead of a bare "expired".
+        msg = ("your session has expired — reading stays free; sign in again to write & sync"
+               if license_policy() in ("read-free", "graph-only")
+               else "your session has expired — sign in again")
     else:
-        msg = "you're not signed in to whatever-recall"
+        msg = ("you're not signed in — reading your memory is free; sign in to stamp, sync or run power mode"
+               if license_policy() in ("read-free", "graph-only")
+               else "you're not signed in to whatever-recall")
 
     # decide interactivity: explicit override wins; else a command is interactive only
     # when it isn't a known non-interactive one AND we have a real TTY.

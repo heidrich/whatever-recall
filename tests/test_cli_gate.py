@@ -39,6 +39,11 @@ def _isolate(tmp_path, monkeypatch):
     # clear the conftest's signed-in env so the gate sees ONLY what each test plants
     monkeypatch.delenv("RECALL_LICENSE", raising=False)
     monkeypatch.delenv("RECALL_PUBKEY", raising=False)
+    # These tests exercise the GATE MECHANICS (token/seat) against a known-gated
+    # command (cmd_brief/cmd_recall). Under the default 'read-free' policy those are
+    # free, so pin the strict 'gated' policy here; the switchable policy itself is
+    # covered by TestLicensePolicy below.
+    monkeypatch.setenv("RECALL_LICENSE_POLICY", "gated")
     monkeypatch.setattr(lic, "LICENSE_PATH", tmp_path / "license.token")
     monkeypatch.setattr(lic, "_PUBKEY_CACHE", tmp_path / "license.pubkey")
     monkeypatch.setattr(lic, "PINNED_PUBKEY_B64", _PUB_B64)
@@ -192,3 +197,77 @@ def test_noninteractive_commands_skip_the_seat_check(monkeypatch):
     for name in login.NONINTERACTIVE_COMMANDS:
         login.ensure_licensed(name, interactive=False)  # must not raise, must not call
     assert called["n"] == 0
+
+
+# ---- switchable LICENSE POLICY (owner 2026-06-20) ---------------------------
+# Four models live in the code at once, flipped by RECALL_LICENSE_POLICY:
+#   all-free / read-free (default) / graph-only / gated. Reading-free means a freed
+#   command works with NO token at all — the bypass sits before load_license().
+
+# the paywall set that must NEVER be free under any read policy.
+_FORBIDDEN_IN_READ_FREE = {
+    "cmd_init", "cmd_stamp", "cmd_handoff", "cmd_freshen", "cmd_unrefine",
+    "cmd_undo", "cmd_forget", "cmd_ack", "cmd_sync_context", "cmd_stamp_commit",
+    "cmd_power", "cmd_refine", "cmd_connect", "cmd_export",
+}
+
+
+def test_read_free_set_never_overlaps_write_or_ai_commands():
+    """Drift-guard: un-gating a write/AI/sync command here would be a paywall leak."""
+    assert login.READ_FREE_COMMANDS.isdisjoint(_FORBIDDEN_IN_READ_FREE)
+    # graph-only is a strict subset of read-free
+    assert login.GRAPH_FREE_COMMANDS <= login.READ_FREE_COMMANDS
+
+
+def test_policy_falls_back_to_default_on_unknown_value(monkeypatch):
+    monkeypatch.setenv("RECALL_LICENSE_POLICY", "nonsense-typo")
+    assert login.license_policy() == "read-free"
+    monkeypatch.delenv("RECALL_LICENSE_POLICY", raising=False)
+    assert login.license_policy() == "read-free"  # default when unset
+
+
+@pytest.mark.parametrize("name", ["cmd_graph", "cmd_stats", "cmd_brief", "cmd_recall"])
+def test_read_free_policy_frees_reads_with_no_token(monkeypatch, name):
+    """read-free (the default): a pure read works with NO token planted at all —
+    it returns before load_license()/seat-check, so reading never stops."""
+    monkeypatch.setenv("RECALL_LICENSE_POLICY", "read-free")
+    login.ensure_licensed(name, interactive=False)  # must NOT raise
+
+
+def test_read_free_policy_with_expired_token(monkeypatch):
+    monkeypatch.setenv("RECALL_LICENSE_POLICY", "read-free")
+    lic.LICENSE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lic.LICENSE_PATH.write_text(_token(exp_in=-60), encoding="utf-8")
+    login.ensure_licensed("cmd_graph", interactive=False)  # reading stays free
+
+
+def test_read_free_policy_still_gates_writes(monkeypatch):
+    """read-free frees reads but a write/AI/sync command still requires a license."""
+    monkeypatch.setenv("RECALL_LICENSE_POLICY", "read-free")
+    for name in ("cmd_stamp", "cmd_export", "cmd_power"):
+        with pytest.raises(login.NotLicensed):
+            login.ensure_licensed(name, interactive=False)
+
+
+def test_graph_only_policy_frees_graph_but_not_brief(monkeypatch):
+    monkeypatch.setenv("RECALL_LICENSE_POLICY", "graph-only")
+    login.ensure_licensed("cmd_graph", interactive=False)   # free
+    login.ensure_licensed("cmd_stats", interactive=False)   # free
+    with pytest.raises(login.NotLicensed):
+        login.ensure_licensed("cmd_brief", interactive=False)  # NOT in graph-only
+
+
+def test_all_free_policy_frees_everything(monkeypatch):
+    """all-free: even writes/AI run without a license (the 'switch it all off' mode)."""
+    monkeypatch.setenv("RECALL_LICENSE_POLICY", "all-free")
+    for name in ("cmd_graph", "cmd_stamp", "cmd_export", "cmd_power", "cmd_init"):
+        login.ensure_licensed(name, interactive=False)  # must NOT raise
+
+
+def test_gated_policy_blocks_reads_too(monkeypatch):
+    """gated (strict): nothing free but login/logout/stop — graph/stats need a license."""
+    monkeypatch.setenv("RECALL_LICENSE_POLICY", "gated")
+    with pytest.raises(login.NotLicensed):
+        login.ensure_licensed("cmd_graph", interactive=False)
+    # but the always-free trio still works
+    login.ensure_licensed("cmd_login", interactive=False)
