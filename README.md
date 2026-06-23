@@ -21,11 +21,6 @@
 
 **Every code-search tool optimizes the answer. recall makes the code self-aware enough to fix your AI's question first.**
 
-**▶ See it live — the v1.2 graph preview:**
-
-[![whatever-recall v1.2 — early preview](https://img.youtube.com/vi/5YOvo4bZjFg/hqdefault.jpg)](https://www.youtube.com/watch?v=5YOvo4bZjFg)
-
-*Early preview of v1.2 — not shipped yet. [Watch on YouTube →](https://www.youtube.com/watch?v=5YOvo4bZjFg)*
 
 Watch an AI work: it invents a symbol name from its training (`enforceSeats`? `seatLimit`?), greps your repo, misses, guesses again — **~214,000 tokens for three questions**, and its training is *misleading* it the whole time. recall captured what your repo really calls things at write-time, so it corrects the guess into the real name before the grep ever runs. No grep or embedding can do that — they never collected the truth.
 
